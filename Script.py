@@ -3,311 +3,338 @@ from datetime import datetime
 import io
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import streamlit as st
 from fpdf import FPDF
 
-# --- CONFIGURAÇÃO DA PÁGINA (OTIMIZADA PARA MOBILE) ---
+# --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Simulador RLC - Construtor Mobile", page_icon="⚡", layout="wide"
+    page_title="Simulador RLC Interativo estilo Falstad",
+    page_icon="⚡",
+    layout="wide",
 )
 
-st.title("⚡ Construtor e Analisador de Circuitos RLC")
+st.title("⚡ Simulador RLC: Desenho e Reconhecimento Automático de Grafos")
 st.caption(
-    "Fluxo Mobile: Adicione os componentes e conexões ao circuito primeiro e configure os valores individualmente na etapa seguinte."
+    "Desenhe o circuito posicionando conexões e componentes entre os nós da grade. "
+    "A topologia (Série, Paralelo ou Misto) é identificada automaticamente por Teoria dos Grafos sem qualquer seleção prévia!"
 )
 
-# --- INICIALIZAÇÃO DO ESTADO DA SESSÃO ---
-if "circuito" not in st.session_state:
-    # Estrutura inicial padrão de componentes sem exigir valores imediatos
-    st.session_state.circuito = [
-        {"id": 1, "tipo": "Fonte CA", "valor": 100.0, "unid": "V"},
-        {"id": 2, "tipo": "Resistor", "valor": 100.0, "unid": "Ω"},
-        {"id": 3, "tipo": "Indutor", "valor": 312.0, "unid": "mH"},
-        {"id": 4, "tipo": "Capacitor", "valor": 30.01, "unid": "µF"},
-        {"id": 5, "tipo": "Terra (GND)", "valor": 0.0, "unid": ""},
+# --- INICIALIZAÇÃO DA REDE/GRAFO NO ESTADO DA SESSÃO ---
+if "netlist" not in st.session_state:
+    # Estrutura inicial estilo Falstad: lista de ramos conectando o Nó A ao Nó B
+    st.session_state.netlist = [
+        {
+            "id": 1,
+            "tipo": "Fonte CA",
+            "no_a": 0,
+            "no_b": 1,
+            "valor": 100.0,
+            "unid": "V",
+        },
+        {
+            "id": 2,
+            "tipo": "Resistor",
+            "no_a": 1,
+            "no_b": 2,
+            "valor": 100.0,
+            "unid": "Ω",
+        },
+        {
+            "id": 3,
+            "tipo": "Indutor",
+            "no_a": 2,
+            "no_b": 3,
+            "valor": 312.0,
+            "unid": "mH",
+        },
+        {
+            "id": 4,
+            "tipo": "Capacitor",
+            "no_a": 2,
+            "no_b": 3,
+            "valor": 30.01,
+            "unid": "µF",
+        },
+        {
+            "id": 5,
+            "tipo": "Fio (Wire)",
+            "no_a": 3,
+            "no_b": 0,
+            "valor": 0.0,
+            "unid": "",
+        },
     ]
 
-# --- BARRA LATERAL: PARÂMETROS GERAIS ---
-st.sidebar.header("⚙️ Configurações Gerais")
-freq_fonte = st.sidebar.number_input(
+# --- BARRA LATERAL: PARÂMETROS DA SIMULAÇÃO ---
+st.sidebar.header("⚙️ Parâmetros de Simulação")
+frequencia = st.sidebar.number_input(
     "Frequência da Fonte (Hz)", value=60.0, min_value=0.1, step=1.0
 )
-omega = 2 * np.pi * freq_fonte
+omega = 2 * np.pi * frequencia
 
-modo_arranjo = st.sidebar.selectbox(
-    "Topologia do Circuito",
-    [
-        "Série Puro",
-        "Paralelo Puro",
-        "Misto (Resistor Série + Bloco Paralelo)",
-    ],
-)
+st.sidebar.markdown("---")
+st.sidebar.header("✏️ Ferramentas de Desenho (Adicionar Ramo)")
 
-# --- ETAPA 1: INSERÇÃO RÁPIDA DE COMPONENTES (BOTÕES TOUCH) ---
-st.subheader("🧩 Etapa 1: Adicionar Componentes ao Circuito")
-st.write("Toque nos botões abaixo para inserir os slots dos elementos no seu circuito:")
+with st.sidebar.form("add_branch_form", clear_on_submit=True):
+    tipo_elem = st.selectbox(
+        "Componente", ["Resistor", "Indutor", "Capacitor", "Fonte CA", "Fio (Wire)"]
+    )
+    no_origem = st.number_input(
+        "Nó de Origem (A)", min_value=0, max_value=20, value=0, step=1
+    )
+    no_destino = st.number_input(
+        "Nó de Destino (B)", min_value=0, max_value=20, value=1, step=1
+    )
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+    if tipo_elem == "Resistor":
+        v_def, u_def = 100.0, "Ω"
+    elif tipo_elem == "Indutor":
+        v_def, u_def = 100.0, "mH"
+    elif tipo_elem == "Capacitor":
+        v_def, u_def = 10.0, "µF"
+    elif tipo_elem == "Fonte CA":
+        v_def, u_def = 127.0, "V"
+    else:
+        v_def, u_def = 0.0, ""
 
-with c1:
-    if st.button("➕ Resistor", use_container_width=True):
-        novo_id = len(st.session_state.circuito) + 1
-        st.session_state.circuito.append(
-            {"id": novo_id, "tipo": "Resistor", "valor": 100.0, "unid": "Ω"}
-        )
-        st.rerun()
+    val_elem = st.number_input(
+        f"Valor ({u_def})", value=v_def, min_value=0.0, step=1.0
+    )
 
-with c2:
-    if st.button("➕ Indutor", use_container_width=True):
-        novo_id = len(st.session_state.circuito) + 1
-        st.session_state.circuito.append(
-            {"id": novo_id, "tipo": "Indutor", "valor": 100.0, "unid": "mH"}
-        )
-        st.rerun()
+    if st.form_submit_button("➕ Conectar Ramo ao Esquema"):
+        if no_origem == no_destino:
+            st.error("Os nós de origem e destino devem ser diferentes!")
+        else:
+            novo_id = (
+                max([item["id"] for item in st.session_state.netlist], default=0)
+                + 1
+            )
+            st.session_state.netlist.append(
+                {
+                    "id": novo_id,
+                    "tipo": tipo_elem,
+                    "no_a": int(no_origem),
+                    "no_b": int(no_destino),
+                    "valor": float(val_elem),
+                    "unid": u_def,
+                }
+            )
+            st.rerun()
 
-with c3:
-    if st.button("➕ Capacitor", use_container_width=True):
-        novo_id = len(st.session_state.circuito) + 1
-        st.session_state.circuito.append(
-            {"id": novo_id, "tipo": "Capacitor", "valor": 10.0, "unid": "µF"}
-        )
-        st.rerun()
-
-with c4:
-    if st.button("➕ Fonte CA", use_container_width=True):
-        novo_id = len(st.session_state.circuito) + 1
-        st.session_state.circuito.append(
-            {"id": novo_id, "tipo": "Fonte CA", "valor": 127.0, "unid": "V"}
-        )
-        st.rerun()
-
-with c5:
-    if st.button("➕ Fio (Wire)", use_container_width=True):
-        novo_id = len(st.session_state.circuito) + 1
-        st.session_state.circuito.append(
-            {"id": novo_id, "tipo": "Fio (Wire)", "valor": 0.0, "unid": ""}
-        )
-        st.rerun()
-
-with c6:
-    if st.button("➕ Terra (GND)", use_container_width=True):
-        novo_id = len(st.session_state.circuito) + 1
-        st.session_state.circuito.append(
-            {"id": novo_id, "tipo": "Terra (GND)", "valor": 0.0, "unid": ""}
-        )
-        st.rerun()
-
-if st.button("🗑️ Limpar Todo o Circuito", type="secondary"):
-    st.session_state.circuito = []
+if st.sidebar.button("🗑️ Limpar Tela / Novo Desenho"):
+    st.session_state.netlist = []
     st.rerun()
 
-# --- ETAPA 2: DEFINIÇÃO DE VALORES DOS COMPONENTES INSERIDOS ---
-st.markdown("---")
-st.subheader("⚙️ Etapa 2: Definir Valores dos Componentes no Circuito")
+# --- INTERFACE DE EDIÇÃO DA NETLIST E DOS NÓS ---
+st.subheader("🖥️ Canvas e Editor de Conexões de Nós (Estilo Netlist Falstad)")
+st.caption(
+    "Abaixo estão listados os ramos desenhados. Modifique os nós de conexão ou os valores para alterar a geometria do circuito em tempo real."
+)
 
-if not st.session_state.circuito:
-    st.warning("O circuito está vazio. Adicione componentes na Etapa 1 acima.")
+if not st.session_state.netlist:
+    st.warning(
+        "O Canvas está vazio. Adicione componentes e fios através do menu lateral."
+    )
     st.stop()
 
-# Layout em grade responsiva para mobile
-grid_cols = st.columns(min(len(st.session_state.circuito), 4))
+# Tabela interativa de edição de ramos
+cols_branch = st.columns(min(len(st.session_state.netlist), 4))
+for idx, item in enumerate(st.session_state.netlist):
+    col_t = cols_branch[idx % len(cols_branch)]
+    with col_t:
+        st.markdown(f"**Elemento #{item['id']}: {item['tipo']}**")
+        item["no_a"] = st.number_input(
+            f"Nó A (#{item['id']})",
+            value=int(item["no_a"]),
+            min_value=0,
+            key=f"na_{idx}",
+        )
+        item["no_b"] = st.number_input(
+            f"Nó B (#{item['id']})",
+            value=int(item["no_b"]),
+            min_value=0,
+            key=f"nb_{idx}",
+        )
 
-for idx, comp in enumerate(st.session_state.circuito):
-    col_target = grid_cols[idx % len(grid_cols)]
-    with col_target:
-        st.markdown(f"**Slot #{idx+1}: {comp['tipo']}**")
+        if item["tipo"] not in ["Fio (Wire)"]:
+            item["valor"] = st.number_input(
+                f"Valor ({item['unid']})",
+                value=float(item["valor"]),
+                min_value=0.01 if item["tipo"] != "Fonte CA" else 0.1,
+                key=f"val_{idx}",
+            )
 
-        if comp["tipo"] == "Resistor":
-            comp["valor"] = st.number_input(
-                f"R #{idx+1} (Ω)",
-                value=float(comp["valor"]),
-                min_value=0.1,
-                step=1.0,
-                key=f"val_{idx}",
-            )
-        elif comp["tipo"] == "Indutor":
-            comp["valor"] = st.number_input(
-                f"L #{idx+1} (mH)",
-                value=float(comp["valor"]),
-                min_value=0.1,
-                step=1.0,
-                key=f"val_{idx}",
-            )
-        elif comp["tipo"] == "Capacitor":
-            comp["valor"] = st.number_input(
-                f"C #{idx+1} (µF)",
-                value=float(comp["valor"]),
-                min_value=0.01,
-                step=1.0,
-                key=f"val_{idx}",
-            )
-        elif comp["tipo"] == "Fonte CA":
-            comp["valor"] = st.number_input(
-                f"V_rms #{idx+1} (V)",
-                value=float(comp["valor"]),
-                min_value=0.1,
-                step=1.0,
-                key=f"val_{idx}",
-            )
-        elif comp["tipo"] in ["Fio (Wire)", "Terra (GND)"]:
-            st.caption("Conexão direta (sem valor atribuído)")
-
-        if st.button(f"❌ Remover #{idx+1}", key=f"del_{idx}"):
-            st.session_state.circuito.pop(idx)
+        if st.button(f"❌ Excluir #{item['id']}", key=f"del_{idx}"):
+            st.session_state.netlist.pop(idx)
             st.rerun()
 
 
-# --- DESENHO AUTOMÁTICO DO ESQUEMÁTICO ---
-def renderizar_esquematico(lista_comps, arranjo):
-    fig_esq, ax_esq = plt.subplots(figsize=(8, 2.5))
-    ax_esq.set_aspect("equal")
-    ax_esq.axis("off")
+# --- MOTOR DE RECONHECIMENTO AUTOMÁTICO DA TOPOLOGIA VIA GRAFOS ---
+def analisar_topologia_e_impedancia(netlist, w):
+    # Criação do Grafo de Conexões
+    G = nx.MultiGraph()
+    for item in netlist:
+        G.add_edge(item["no_a"], item["no_b"], key=item["id"], data=item)
 
-    x_pos = 0.0
-    ax_esq.plot([-1, 0], [2, 2], color="black", lw=2)
+    # Identificação da Fonte
+    fontes = [i for i in netlist if i["tipo"] == "Fonte CA"]
+    if not fontes:
+        return (
+            "Indefinida (Sem Fonte)",
+            complex(0, 0),
+            100.0,
+            "Adicione uma Fonte CA.",
+        )
 
-    for i, item in enumerate(lista_comps):
-        tipo = item["tipo"]
-        val = item["valor"]
-        unid = item["unid"]
+    fonte_principal = fontes[0]
+    n_src1, n_src2 = fonte_principal["no_a"], fonte_principal["no_b"]
+    V_rms = fonte_principal["valor"]
 
-        if tipo == "Fonte CA":
-            ax_esq.add_patch(
-                patches.Circle((x_pos, 2), 0.4, fill=False, color="red", lw=2)
-            )
-            ax_esq.text(
-                x_pos,
-                2,
-                "~",
-                fontsize=16,
-                ha="center",
-                va="center",
-                color="red",
-                weight="bold",
-            )
-            ax_esq.text(
-                x_pos, 2.6, f"{val:.0f}{unid}", fontsize=8, ha="center"
-            )
-        elif tipo in ["Resistor", "Indutor", "Capacitor"]:
-            rect = patches.Rectangle(
-                (x_pos - 0.4, 1.6),
-                0.8,
-                0.8,
-                facecolor="whitesmoke",
-                edgecolor="navy",
-                lw=2,
-            )
-            ax_esq.add_patch(rect)
-            ax_esq.text(
-                x_pos,
-                2.0,
-                f"{tipo[0]}:{val:.1f}{unid}",
-                fontsize=7,
-                ha="center",
-                va="center",
-                weight="bold",
-            )
-        elif tipo == "Fio (Wire)":
-            ax_esq.plot(
-                [x_pos - 0.4, x_pos + 0.4], [2, 2], color="green", lw=3
-            )
-            ax_esq.text(
-                x_pos,
-                2.3,
-                "Fio",
-                fontsize=7,
-                ha="center",
-                color="green",
-            )
-        elif tipo == "Terra (GND)":
-            ax_esq.plot(
-                [x_pos, x_pos], [2, 1.2], color="black", lw=2
-            )
-            ax_esq.plot(
-                [x_pos - 0.3, x_pos + 0.3], [1.2, 1.2], color="black", lw=3
-            )
-            ax_esq.plot(
-                [x_pos - 0.2, x_pos + 0.2], [1.0, 1.0], color="black", lw=2
-            )
-            ax_esq.plot(
-                [x_pos - 0.1, x_pos + 0.1], [0.8, 0.8], color="black", lw=1
-            )
+    # Cálculo do número de caminhos paralelos independentes
+    G_sem_fonte = G.copy()
+    # Remove as arestas da fonte
+    for u, v, k, d in list(G_sem_fonte.edges(keys=True, data=True)):
+        if d["data"]["tipo"] == "Fonte CA":
+            G_sem_fonte.remove_edge(u, v, key=k)
 
-        if i < len(lista_comps) - 1:
-            ax_esq.plot(
-                [x_pos + 0.4, x_pos + 1.1], [2, 2], color="black", lw=2
-            )
-        x_pos += 1.5
+    if not nx.has_path(G_sem_fonte, n_src1, n_src2):
+        return (
+            "Circuito Aberto",
+            complex(1e9, 0),
+            V_rms,
+            "Não há caminho fechado entre os terminais da fonte.",
+        )
 
-    ax_esq.set_xlim(-1.5, x_pos + 0.5)
-    ax_esq.set_ylim(-0.2, 3.2)
-    return fig_esq
+    caminhos = list(nx.all_simple_paths(G_sem_fonte, source=n_src1, target=n_src2))
+    graus_nos_internos = [
+        degree
+        for node, degree in G_sem_fonte.degree()
+        if node not in [n_src1, n_src2]
+    ]
 
-
-st.markdown("---")
-st.subheader("🔌 Esquemático do Circuito Montado")
-fig_esquematico = renderizar_esquematico(
-    st.session_state.circuito, modo_arranjo
-)
-st.pyplot(fig_esquematico)
-
-
-# --- MOTOR DE CÁLCULO ELÉTRICO ---
-def calc_z(item, w):
-    t = item["tipo"]
-    v = item["valor"]
-    if t == "Resistor":
-        return complex(v, 0)
-    elif t == "Indutor":
-        return complex(0, w * (v / 1000.0))
-    elif t == "Capacitor":
-        return complex(0, -1 / (w * (v / 1e6)))
-    return complex(0, 0)
-
-
-# Filtra fontes e elementos reativos/resistivos
-fontes = [c for c in st.session_state.circuito if c["tipo"] == "Fonte CA"]
-elementos_passivos = [
-    c
-    for c in st.session_state.circuito
-    if c["tipo"] in ["Resistor", "Indutor", "Capacitor"]
-]
-
-V_fonte = fontes[0]["valor"] if fontes else 100.0
-
-if not elementos_passivos:
-    st.info("Adicione pelo menos um Resistor, Indutor ou Capacitor para calcular a impedância.")
-    st.stop()
-
-try:
-    if modo_arranjo == "Série Puro":
-        Z_eq = sum(calc_z(c, omega) for c in elementos_passivos)
-    elif modo_arranjo == "Paralelo Puro":
-        Y_tot = sum(1 / calc_z(c, omega) for c in elementos_passivos)
-        Z_eq = 1 / Y_tot
+    # Classificação gráfica da topologia
+    if len(caminhos) == 1 and all(d <= 2 for d in graus_nos_internos):
+        topologia_nome = "Série Puro"
+    elif len(caminhos) > 1 and all(len(p) == 2 for p in caminhos):
+        topologia_nome = "Paralelo Puro"
     else:
-        res = [c for c in elementos_passivos if c["tipo"] == "Resistor"]
-        reat = [c for c in elementos_passivos if c["tipo"] != "Resistor"]
-        if not res or not reat:
-            Z_eq = sum(calc_z(c, omega) for c in elementos_passivos)
-        else:
-            Z_s = sum(calc_z(r, omega) for r in res)
-            Y_p = sum(1 / calc_z(c, omega) for c in reat)
-            Z_eq = Z_s + (1 / Y_p)
-except ZeroDivisionError:
-    st.error("Ressonância extrema ou impedância nula detectada.")
-    st.stop()
+        topologia_nome = "Misto (Série-Paralelo)"
 
-# Grandezas Resultantes
+    # Análise Nodal para Impedância Equivalente (MNA)
+    # Cálculo das impedâncias individuais dos ramos
+    def calc_z_ramo(elem, frequency_w):
+        t, v = elem["tipo"], elem["valor"]
+        if t == "Resistor":
+            return complex(v, 0)
+        elif t == "Indutor":
+            return complex(0, frequency_w * (v / 1000.0))
+        elif t == "Capacitor":
+            return complex(0, -1 / (frequency_w * (v / 1e6)))
+        elif t == "Fio (Wire)":
+            return complex(1e-6, 0)  # Impedância desprezível
+        return complex(1e-6, 0)
+
+    # Identificação dos nós
+    nos_unicos = sorted(list(G.nodes()))
+    node_map = {node: idx for idx, node in enumerate(nos_unicos)}
+    N = len(nos_unicos)
+
+    # Nó de referência (GND) = n_src2
+    ref_node = node_map[n_src2]
+    src_node = node_map[n_src1]
+
+    # Matriz de Admitância Y
+    Y = np.zeros((N, N), dtype=complex)
+    for item in netlist:
+        if item["tipo"] == "Fonte CA":
+            continue
+        z_item = calc_z_ramo(item, w)
+        y_item = 1.0 / z_item
+        u, v = node_map[item["no_a"]], node_map[item["no_b"]]
+        Y[u, u] += y_item
+        Y[v, v] += y_item
+        Y[u, v] -= y_item
+        Y[v, u] -= y_item
+
+    # Submatriz reduzida excluindo nó de referência
+    nos_ativos = [i for i in range(N) if i != ref_node]
+    Y_red = Y[np.ix_(nos_ativos, nos_ativos)]
+
+    # Injeção de corrente unitária no nó da fonte para determinar Z_eq
+    I_vector = np.zeros(len(nos_ativos), dtype=complex)
+    idx_src_red = nos_ativos.index(src_node)
+    I_vector[idx_src_red] = 1.0
+
+    try:
+        V_potenciais = np.linalg.solve(Y_red, I_vector)
+        Z_eq = V_potenciais[idx_src_red]
+    except np.linalg.LinAlgError:
+        Z_eq = complex(1e-6, 0)
+
+    return topologia_nome, Z_eq, V_rms, "Cálculo realizado com sucesso."
+
+
+topologia_detectada, Z_eq, V_rms, msg_status = analisar_topologia_e_impedancia(
+    st.session_state.netlist, omega
+)
+
+# --- RENDERING GRÁFICO DO ESQUEMÁTICO BASEADO NO GRAFO ---
+st.markdown("---")
+st.subheader("🔌 Esquemático do Circuito Reconhecido Visualmente")
+st.caption(f"Topologia Detectada Graficamente: **{topologia_detectada}**")
+
+
+def desenhar_grafo_esquematico(netlist):
+    G_vis = nx.Graph()
+    for item in netlist:
+        G_vis.add_edge(
+            item["no_a"],
+            item["no_b"],
+            label=f"{item['tipo'][0]}:{item['valor']}{item['unid']}",
+        )
+
+    fig_g, ax_g = plt.subplots(figsize=(8, 3))
+    pos = nx.spring_layout(G_vis, seed=42)
+
+    nx.draw_networkx_nodes(
+        G_vis, pos, node_color="gold", node_size=700, ax=ax_g
+    )
+    nx.draw_networkx_labels(
+        G_vis,
+        pos,
+        font_size=10,
+        font_weight="bold",
+        font_color="black",
+        ax=ax_g,
+    )
+
+    edge_labels = {
+        (u, v): d["label"] for u, v, d in G_vis.edges(data=True)
+    }
+    nx.draw_networkx_edges(
+        G_vis, pos, width=2, edge_color="navy", ax=ax_g
+    )
+    nx.draw_networkx_edge_labels(
+        G_vis, pos, edge_labels=edge_labels, font_size=8, ax=ax_g
+    )
+
+    ax_g.axis("off")
+    return fig_g
+
+
+st.pyplot(desenhar_grafo_esquematico(st.session_state.netlist))
+
+# --- GRANDEZA ELÉTRICAS CALCULADAS ---
 abs_Z = abs(Z_eq)
 angle_Z_rad = cmath.phase(Z_eq)
 angle_Z_deg = np.degrees(angle_Z_rad)
 
-I_rms = V_fonte / abs_Z if abs_Z > 0 else 0
+I_rms = V_rms / abs_Z if abs_Z > 0 else 0.0
 angle_I_deg = -angle_Z_deg
 
-S = V_fonte * I_rms
+S = V_rms * I_rms
 P = S * np.cos(angle_Z_rad)
 Q = S * np.sin(angle_Z_rad)
 FP = np.cos(angle_Z_rad)
@@ -315,34 +342,33 @@ carater = (
     "Indutivo" if Q > 0.01 else "Capacitivo" if Q < -0.01 else "Resistivo Puro"
 )
 
-# --- EXIBIÇÃO DOS RESULTADOS ---
-st.subheader("📊 Resultados dos Cálculos")
+st.subheader("📊 Resultados Numéricos")
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Impedância |Z_eq|", f"{abs_Z:.2f} Ω")
-m2.metric("Corrente Total |I|", f"{I_rms:.2f} A")
+m1.metric("Impedância Equivalente |Z_eq|", f"{abs_Z:.2f} Ω")
+m2.metric("Corrente Total RMS |I|", f"{I_rms:.2f} A")
 m3.metric("Potência Ativa (P)", f"{P:.2f} W")
-m4.metric("Fator de Potência", f"{FP:.4f}")
+m4.metric("Fator de Potência (FP)", f"{FP:.4f}")
 
-# --- DIAGRAMAS VECTORIAIS ---
+# --- DIAGRAMAS FASORIAIS E TRIÂNGULO DE POTÊNCIA ---
 st.markdown("---")
-st.subheader("📐 Diagramas Fasorial e de Potências")
+st.subheader("📐 Diagramas Fasoriais e Triângulo de Potências")
 g1, g2 = st.columns(2)
 
 with g1:
     st.markdown("**Diagrama Fasorial (V e I)**")
-    fig_fasor, ax_f = plt.subplots(figsize=(4, 4))
-    escala_I = (V_fonte / I_rms) * 0.4 if I_rms > 0 else 1.0
+    fig_fasor, ax_f = plt.subplots(figsize=(4.5, 4.5))
+    escala_I = (V_rms / I_rms) * 0.4 if I_rms > 0 else 1.0
 
     ax_f.quiver(
         0,
         0,
-        V_fonte,
+        V_rms,
         0,
         angles="xy",
         scale_units="xy",
         scale=1,
         color="red",
-        label=f"V = {V_fonte:.1f}V ∠0°",
+        label=f"V = {V_rms:.1f}V ∠0°",
     )
     u_I = (I_rms * escala_I) * np.cos(np.radians(angle_I_deg))
     v_I = (I_rms * escala_I) * np.sin(np.radians(angle_I_deg))
@@ -358,7 +384,7 @@ with g1:
         label=f"I = {I_rms:.2f}A ∠{angle_I_deg:.1f}°",
     )
 
-    lim = max(V_fonte, abs(I_rms * escala_I)) * 1.2
+    lim = max(V_rms, abs(I_rms * escala_I)) * 1.2
     ax_f.set_xlim(-lim, lim)
     ax_f.set_ylim(-lim, lim)
     ax_f.set_aspect("equal")
@@ -370,7 +396,7 @@ with g1:
 
 with g2:
     st.markdown("**Triângulo de Potências (P, Q, S)**")
-    fig_pot, ax_p = plt.subplots(figsize=(4, 4))
+    fig_pot, ax_p = plt.subplots(figsize=(4.5, 4.5))
 
     ax_p.quiver(
         0,
@@ -413,55 +439,57 @@ with g2:
     ax_p.legend(loc="upper left", fontsize=8)
     st.pyplot(fig_pot)
 
-# --- GERADOR DE RELATÓRIO PDF ---
+# --- GERADOR DE RELATÓRIO EM PDF ---
 st.markdown("---")
-st.subheader("📄 Exportar Relatório PDF")
+st.subheader("📄 Exportar Relatório PDF com Topologia Reconhecida")
 
 
-def gerar_pdf(comps, topologia, v_f, f_f, z_c, i_val, p_val, q_val, s_val, fp_val):
+def gerar_pdf_falstad(netlist, topologia, v_f, f_f, z_c, i_val, p_val, q_val, s_val, fp_val):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, "Relatorio Tecnico do Circuito RLC", ln=True, align="C")
-    pdf.ln(5)
+    pdf.cell(
+        0, 10, "Relatorio Tecnico - Circuito RLC (Topologia via Grafo)", ln=True, align="C"
+    )
+    pdf.ln(4)
 
     pdf.set_font("Arial", size=10)
-    pdf.cell(0, 6, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=True)
-    pdf.cell(0, 6, f"Topologia: {topologia}", ln=True)
+    pdf.cell(0, 6, f"Data de Emissao: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=True)
+    pdf.cell(0, 6, f"Topologia Detectada Graficamente: {topologia}", ln=True)
     pdf.cell(0, 6, f"Fonte CA: {v_f:.2f} V @ {f_f:.2f} Hz", ln=True)
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 6, "Componentes do Circuito:", ln=True)
+    pdf.cell(0, 6, "Netlist do Esquema Desenhado:", ln=True)
     pdf.set_font("Arial", size=10)
-    for idx, c in enumerate(comps, 1):
-        unid = "Ohm" if c["unid"] == "Ω" else c["unid"]
+    for item in netlist:
+        unid = "Ohm" if item["unid"] == "Ω" else item["unid"]
         pdf.cell(
             0,
             5,
-            f"  Slot {idx}: {c['tipo']} - Valor: {c['valor']:.2f} {unid}",
+            f"  Ramo #{item['id']}: {item['tipo']} entre No {item['no_a']} e No {item['no_b']} - Valor: {item['valor']:.2f} {unid}",
             ln=True,
         )
 
     pdf.ln(4)
     pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 6, "Resultados Calculados:", ln=True)
+    pdf.cell(0, 6, "Resultados Calculados por Analise Nodal:", ln=True)
     pdf.set_font("Arial", size=10)
-    pdf.cell(0, 5, f"  Impedancia Equivalente: {abs(z_c):.2f} Ohm", ln=True)
-    pdf.cell(0, 5, f"  Corrente Total RMS: {i_val:.2f} A", ln=True)
+    pdf.cell(0, 5, f"  Impedancia Equivalente (|Z_eq|): {abs(z_c):.2f} Ohm", ln=True)
+    pdf.cell(0, 5, f"  Corrente Total RMS (|I_rms|): {i_val:.2f} A", ln=True)
     pdf.cell(0, 5, f"  Potencia Ativa (P): {p_val:.2f} W", ln=True)
     pdf.cell(0, 5, f"  Potencia Reativa (Q): {q_val:.2f} VAR", ln=True)
     pdf.cell(0, 5, f"  Potencia Aparente (S): {s_val:.2f} VA", ln=True)
-    pdf.cell(0, 5, f"  Fator de Potencia: {fp_val:.4f}", ln=True)
+    pdf.cell(0, 5, f"  Fator de Potencia (FP): {fp_val:.4f}", ln=True)
 
     return bytes(pdf.output())
 
 
-pdf_data = gerar_pdf(
-    st.session_state.circuito,
-    modo_arranjo,
-    V_fonte,
-    freq_fonte,
+pdf_bytes = gerar_pdf_falstad(
+    st.session_state.netlist,
+    topologia_detectada,
+    V_rms,
+    frequencia,
     Z_eq,
     I_rms,
     P,
@@ -471,9 +499,9 @@ pdf_data = gerar_pdf(
 )
 
 st.download_button(
-    label="📥 Baixar Relatório PDF Completo",
-    data=pdf_data,
-    file_name=f"relatorio_circuito_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+    label="📥 Baixar Relatório Técnico em PDF (.pdf)",
+    data=pdf_bytes,
+    file_name=f"relatorio_falstad_rlc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
     mime="application/pdf",
     use_container_width=True,
 )
