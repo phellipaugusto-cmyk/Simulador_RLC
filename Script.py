@@ -473,7 +473,9 @@ Data de Geracao: {agora}
 - Lista de Componentes do Circuito:
 """
     for i, c in enumerate(componentes, 1):
-        texto += f"   [{i}] {c['tipo']}: {c['valor']} {c['unidade']}\n"
+        # Substitui o caractere especial Ω por Ohm no texto do relatório para evitar o caractere ? no PDF
+        unidade_limpa = "Ohm" if c["unidade"] == "Ω" else c["unidade"]
+        texto += f"   [{i}] {c['tipo']}: {c['valor']} {unidade_limpa}\n"
 
     texto += f"""
 3. RESULTADOS DOS CALCULOS ELETRONICOS
@@ -505,7 +507,6 @@ def gerar_pdf_bytes(texto):
 
     for line in texto.split("\n"):
         clean_line = line.encode("latin-1", "replace").decode("latin-1")
-        # Força o reset horizontal para a margem esquerda (15mm) antes de cada linha
         pdf.set_x(15)
         if not clean_line.strip():
             pdf.ln(3)
