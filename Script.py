@@ -453,19 +453,22 @@ def gerar_relatorio_texto(
     z_mag = abs(z_complex)
     z_deg = np.degrees(cmath.phase(z_complex))
 
-    texto = f"""====================================================================
-RELATÓRIO TÉCNICO DE ANÁLISE DE CIRCUITO RLC
-Data de Geração: {agora}
-====================================================================
+    div_main = "=" * 45
+    div_sub = "-" * 45
 
-1. PARÂMETROS DA FONTE DE ALIMENTAÇÃO
---------------------------------------------------------------------
-- Tensão Eficaz (V_rms): {tensao:.2f} V
-- Frequência (f): {freq:.2f} Hz
-- Frequência Angular (w): {2 * np.pi * freq:.2f} rad/s
+    texto = f"""{div_main}
+RELATORIO TECNICO DE ANALISE DE CIRCUITO RLC
+Data de Geracao: {agora}
+{div_main}
+
+1. PARAMETROS DA FONTE DE ALIMENTACAO
+{div_sub}
+- Tensao Eficaz (V_rms): {tensao:.2f} V
+- Frequencia (f): {freq:.2f} Hz
+- Frequencia Angular (w): {2 * np.pi * freq:.2f} rad/s
 
 2. TOPOLOGIA E COMPONENTES DO CIRCUITO
---------------------------------------------------------------------
+{div_sub}
 - Topologia Selecionada: {modo_arranjo}
 - Lista de Componentes do Circuito:
 """
@@ -473,34 +476,44 @@ Data de Geração: {agora}
         texto += f"   [{i}] {c['tipo']}: {c['valor']} {c['unidade']}\n"
 
     texto += f"""
-3. RESULTADOS DOS CÁLCULOS ELETRÔNICOS
---------------------------------------------------------------------
-- Impedância Equivalente (|Z_eq|): {z_mag:.2f} Ω
-- Ângulo da Impedância (θ_Z): {z_deg:.2f}°
-- Formato Complexo de Z_eq: {z_complex.real:.2f} + j({z_complex.imag:.2f}) Ω
+3. RESULTADOS DOS CALCULOS ELETRONICOS
+{div_sub}
+- Impedancia Equivalente (|Z_eq|): {z_mag:.2f} Ohm
+- Angulo da Impedancia (theta_Z): {z_deg:.2f} deg
+- Formato Complexo de Z_eq: {z_complex.real:.2f} + j({z_complex.imag:.2f}) Ohm
 - Corrente Total RMS (|I_rms|): {i_val:.2f} A
-- Ângulo da Corrente (θ_I): {-z_deg:.2f}°
-- Potência Ativa (P): {p_val:.2f} W
-- Potência Reativa (Q): {q_val:.2f} VAR
-- Potência Aparente (S): {s_val:.2f} VA
-- Fator de Potência (FP): {fp_val:.4f}
+- Angulo da Corrente (theta_I): {-z_deg:.2f} deg
+- Potencia Ativa (P): {p_val:.2f} W
+- Potencia Reativa (Q): {q_val:.2f} VAR
+- Potencia Aparente (S): {s_val:.2f} VA
+- Fator de Potencia (FP): {fp_val:.4f}
 - Comportamento Predominante: {natureza}
 
-====================================================================
+{div_main}
 Gerado automaticamente pelo Simulador de Circuitos RLC
-====================================================================
+{div_main}
 """
     return texto
 
 
 def gerar_pdf_bytes(texto):
     pdf = FPDF()
-    pdf.add_page()
+    pdf.set_margins(15, 15, 15)
     pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
     pdf.set_font("Courier", size=9)
+
     for line in texto.split("\n"):
         clean_line = line.encode("latin-1", "replace").decode("latin-1")
-        pdf.multi_cell(0, 5, clean_line)
+        # Força o reset horizontal para a margem esquerda (15mm) antes de cada linha
+        pdf.set_x(15)
+        if not clean_line.strip():
+            pdf.ln(3)
+        else:
+            pdf.multi_cell(
+                w=0, h=5, text=clean_line, new_x="LMARGIN", new_y="NEXT"
+            )
+
     return bytes(pdf.output())
 
 
