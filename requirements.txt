@@ -1,9 +1,6 @@
 streamlit
 networkx
-numpy
-pandas
-fpdfstreamlit
 matplotlib
 numpy
-fpdf2
-streamlit-drawable-canvas
+pandas
+fpdf
