@@ -13,7 +13,7 @@ from fpdf import FPDF
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Simulador RLC - Símbolos Normativos e Análise Nodal",
+    page_title="Simulador RLC - Símbolos Normativos e Análise Completa",
     page_icon="⚡",
     layout="wide",
 )
@@ -21,18 +21,18 @@ st.set_page_config(
 st.title("⚡ Simulador RLC: Desenho Ortogonal e Análise Automática")
 st.caption(
     "Clique e arraste entre os pontos cinzas da grade para criar os ramos do circuito. "
-    "Abaixo do quadro, defina o símbolo normativo e o valor de cada ramo para calcular a impedância equivalente $Z_{\\text{eq}}$, "
-    "as correntes, as potências e gerar o diagrama fasorial e o relatório em PDF."
+    "Abaixo do quadro, selecione o símbolo elétrico e o valor de cada ramo para calcular a impedância equivalente $Z_{\\text{eq}}$, "
+    "os diagramas fasoriais, o triângulo de potências e o relatório técnico."
 )
 
 # --- DIMENSÕES DA GRADE E CANVAS ---
-GRID_SIZE = 50  # Distância em pixels entre os nós da grade
+GRID_SIZE = 50  # Distância em pixels entre nós da grade
 CANVAS_WIDTH = 800
 CANVAS_HEIGHT = 400
 
 
 def gerar_imagem_grade_permanente(width, height, grid_step):
-    """Gera o fundo estático com linhas ortogonais e nós de atração destacados."""
+    """Gera o fundo estático com grade ortogonal e pontos de atração fixos."""
     img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
 
@@ -50,6 +50,27 @@ def gerar_imagem_grade_permanente(width, height, grid_step):
 
 bg_grid_image = gerar_imagem_grade_permanente(CANVAS_WIDTH, CANVAS_HEIGHT, GRID_SIZE)
 
+# --- DECODIFICADOR MATEMÁTICO DE COORDENADAS DO FABRIC.JS ---
+def extrair_coordenadas_linha(obj):
+    """Calcula as coordenadas absolutas (x1, y1) e (x2, y2) reais de um objeto line do Fabric.js."""
+    left = float(obj.get("left", 0))
+    top = float(obj.get("top", 0))
+    x1 = float(obj.get("x1", 0))
+    y1 = float(obj.get("y1", 0))
+    x2 = float(obj.get("x2", 0))
+    y2 = float(obj.get("y2", 0))
+
+    width = float(obj.get("width", abs(x2 - x1)))
+    height = float(obj.get("height", abs(y2 - y1)))
+
+    abs_x1 = left if x1 <= x2 else left + width
+    abs_x2 = left + width if x1 <= x2 else left
+    abs_y1 = top if y1 <= y2 else top + height
+    abs_y2 = top + height if y1 <= y2 else top
+
+    return abs_x1, abs_y1, abs_x2, abs_y2
+
+
 # --- BARRA LATERAL: PARÂMETROS GLOBAIS ---
 st.sidebar.header("⚙️ Parâmetros Globais")
 freq = st.sidebar.number_input("Frequência f (Hz)", value=60.0, min_value=0.1, step=1.0)
@@ -57,7 +78,7 @@ omega = 2 * np.pi * freq
 
 # --- QUADRO INTERATIVO DE DESENHO ---
 st.subheader("🖥️ Quadro de Desenho Ortogonal (Ligue Ponto a Ponto)")
-st.caption("Desenhe as linhas em preto conectando os nós cinzas da grade. O alinhamento ortogonal a 90° é forçado automaticamente.")
+st.caption("Desenhe as linhas em preto conectando os nós cinzas da grade.")
 
 canvas_result = st_canvas(
     fill_color="rgba(0,0,0,0)",
@@ -67,10 +88,10 @@ canvas_result = st_canvas(
     height=CANVAS_HEIGHT,
     width=CANVAS_WIDTH,
     drawing_mode="line",
-    key="quadro_rlc_fabric_fix",
+    key="quadro_rlc_fabric_perfect_fix",
 )
 
-# --- PROCESSAMENTO DE COORDENADAS E TRAVAMENTO NOS NÓS ---
+# --- PROCESSAMENTO DE TRAÇOS E TRAVAMENTO EM NÓS ---
 ramos_detectados = []
 
 if canvas_result.json_data is not None:
@@ -78,26 +99,15 @@ if canvas_result.json_data is not None:
 
     for idx, obj in enumerate(objects):
         if obj.get("type") == "line":
-            # Extração correta de coordenadas absolutas do Fabric.js
-            left = obj.get("left", 0)
-            top = obj.get("top", 0)
-            x1_rel = obj.get("x1", 0)
-            y1_rel = obj.get("y1", 0)
-            x2_rel = obj.get("x2", 0)
-            y2_rel = obj.get("y2", 0)
+            abs_x1, abs_y1, abs_x2, abs_y2 = extrair_coordenadas_linha(obj)
 
-            abs_x1 = left + x1_rel
-            abs_y1 = top + y1_rel
-            abs_x2 = left + x2_rel
-            abs_y2 = top + y2_rel
-
-            # Snapping para os nós da grade
+            # Snapping magnético para nós da grade
             x1_snap = round(abs_x1 / GRID_SIZE) * GRID_SIZE
             y1_snap = round(abs_y1 / GRID_SIZE) * GRID_SIZE
             x2_snap = round(abs_x2 / GRID_SIZE) * GRID_SIZE
             y2_snap = round(abs_y2 / GRID_SIZE) * GRID_SIZE
 
-            # Força o alinhamento ortogonal (ângulos retos de 90°)
+            # Alinhamento ortogonal (ângulos retos de 90°)
             dx = abs(x2_snap - x1_snap)
             dy = abs(y2_snap - y1_snap)
             if dx >= dy:
@@ -123,7 +133,7 @@ st.markdown("---")
 st.subheader("⚙️ Definição dos Símbolos dos Ramos Desenhados")
 
 if not ramos_detectados:
-    st.info("💡 Desenhe os ramos do circuito no quadro acima conectando os pontos cinzas da grade para ativar a análise.")
+    st.info("💡 Desenhe os ramos do circuito no quadro acima conectando os pontos cinzas para gerar o esquema e os cálculos.")
     st.stop()
 
 # --- ATRIBUIÇÃO DE SÍMBOLOS E VALORES POR RAMO ---
@@ -143,22 +153,22 @@ for idx, ramo in enumerate(ramos_detectados):
             f"Símbolo #{ramo['id']}",
             OPCOES_SIMBOLOS,
             index=OPCOES_SIMBOLOS.index(tipo_def),
-            key=f"sym_sel_{idx}",
+            key=f"sym_sel_fixed_{idx}",
         )
 
         val = 0.0
         unid = ""
         if tipo_sel == "Resistor":
-            val = st.number_input(f"Resistência (Ω)", value=100.0, min_value=0.01, key=f"v_sym_{idx}")
+            val = st.number_input(f"Resistência (Ω)", value=100.0, min_value=0.01, key=f"v_sym_fix_{idx}")
             unid = "Ω"
         elif tipo_sel == "Indutor":
-            val = st.number_input(f"Indutância (mH)", value=312.0, min_value=0.01, key=f"v_sym_{idx}")
+            val = st.number_input(f"Indutância (mH)", value=312.0, min_value=0.01, key=f"v_sym_fix_{idx}")
             unid = "mH"
         elif tipo_sel == "Capacitor":
-            val = st.number_input(f"Capacitância (µF)", value=30.01, min_value=0.01, key=f"v_sym_{idx}")
+            val = st.number_input(f"Capacitância (µF)", value=30.01, min_value=0.01, key=f"v_sym_fix_{idx}")
             unid = "µF"
         elif tipo_sel == "Fonte CA":
-            val = st.number_input(f"Tensão Fonte (V)", value=127.0, min_value=0.1, key=f"v_sym_{idx}")
+            val = st.number_input(f"Tensão Fonte (V)", value=127.0, min_value=0.1, key=f"v_sym_fix_{idx}")
             unid = "V"
 
         netlist.append({
@@ -175,7 +185,7 @@ for idx, ramo in enumerate(ramos_detectados):
 
 # --- RENDERIZAÇÃO DOS SÍMBOLOS ELÉTRICOS NORMATIVOS ---
 def desenhar_simbolo_normativo(ax, p1, p2, tipo, rotulo):
-    """Desenha a fiação em preto e os símbolos elétricos normativos no meio de cada segmento."""
+    """Desenha fiação ortogonal e insere os símbolos normativos centralizados."""
     x1, y1 = p1
     x2, y2 = p2
     dx, dy = x2 - x1, y2 - y1
@@ -276,7 +286,7 @@ def renderizar_esquema_simbolos(netlist_data):
 
     ax.set_aspect("equal")
     ax.axis("off")
-    plt.title("Circuito Renderizado do Quadro com Símbolos Normativos", fontsize=11, fontweight="bold")
+    plt.title("Esquema Elétrico Renderizado com Símbolos Normativos", fontsize=11, fontweight="bold")
     return fig
 
 
@@ -285,7 +295,7 @@ st.subheader("🖥️ Esquema Elétrico Renderizado com Símbolos Padrão")
 st.pyplot(renderizar_esquema_simbolos(netlist))
 
 
-# --- MOTOR DE CÁLCULO NODAL (MNA / ANÁLISE DE GRAFOS) ---
+# --- MOTOR DE CÁLCULO NODAL (MNA) ---
 def analisar_circuito(netlist_data, w):
     G = nx.MultiGraph()
     for item in netlist_data:
@@ -305,7 +315,7 @@ def analisar_circuito(netlist_data, w):
             G_sem_fonte.remove_edge(u, v, key=k)
 
     if not nx.has_path(G_sem_fonte, n_src1, n_src2):
-        return "Circuito Aberto", complex(1e9, 0), V_rms, "O circuito está aberto (não há malha fechada conectando a fonte)."
+        return "Circuito Aberto", complex(1e9, 0), V_rms, "Não há malha fechada ligando os nós da fonte aos componentes."
 
     def calc_z_elem(elem, frequency_w):
         t, v = elem["tipo"], elem["valor"]
@@ -358,7 +368,7 @@ if status != "Sucesso":
     st.warning(f"⚠️ {msg}")
     st.stop()
 
-# --- RESULTADOS ELÉTRICOS CALCULADOS ---
+# --- RESULTADOS DAS GRANDEZAS ELÉTRICAS ---
 abs_Z = abs(Z_eq)
 angle_Z_rad = cmath.phase(Z_eq)
 angle_Z_deg = np.degrees(angle_Z_rad)
@@ -389,7 +399,7 @@ with r2:
     st.write(f"**Potência Aparente (S):** {S:.2f} VA")
     st.write(f"**Comportamento Predominante:** {carater}")
 
-# --- DIAGRAMAS FASORIAIS ---
+# --- DIAGRAMAS FASORIAIS E TRIÂNGULO DE POTÊNCIAS ---
 st.markdown("---")
 st.subheader("📐 Diagrama Fasorial e Triângulo de Potências")
 g1, g2 = st.columns(2)
