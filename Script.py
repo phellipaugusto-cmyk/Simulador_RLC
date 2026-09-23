@@ -9,24 +9,42 @@ from fpdf import FPDF
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Simulador RLC Profissional", page_icon="⚡", layout="wide"
+    page_title="Simulador RLC Interativo & Topologia Dinâmica",
+    page_icon="⚡",
+    layout="wide",
 )
 
-st.title("⚡ Simulador e Analisador de Circuitos RLC")
+st.title("⚡ Simulador RLC: Construtor Dinâmico de Topologia")
 st.markdown(
-    "Defina a estrutura do circuito, ajuste os valores dos componentes interativamente e analise os diagramas, "
-    "formas de onda e relatórios exportáveis com gráficos integrados em **PDF**, **TXT** e **Markdown**."
+    "Monte a estrutura do seu circuito definindo livremente o arranjo de cada elemento (Série ou Bloco Paralelo). "
+    "O motor do aplicativo identificará a topologia criada, calculará todas as grandezas elétricas e gerará o relatório técnico completo em **PDF**."
 )
 
 # --- INICIALIZAÇÃO DO ESTADO DA SESSÃO ---
 if "componentes" not in st.session_state:
+    # Estrutura inicial: cada elemento possui tipo, valor, unidade e 'posicao' ('Série (Linha Principal)' ou 'Ramo Paralelo A', 'Ramo Paralelo B', etc.)
     st.session_state.componentes = [
-        {"tipo": "Resistor", "valor": 100.0, "unidade": "Ω"},
-        {"tipo": "Indutor", "valor": 312.0, "unidade": "mH"},
-        {"tipo": "Capacitor", "valor": 30.01, "unidade": "µF"},
+        {
+            "tipo": "Resistor",
+            "valor": 100.0,
+            "unidade": "Ω",
+            "posicao": "Série (Linha Principal)",
+        },
+        {
+            "tipo": "Indutor",
+            "valor": 312.0,
+            "unidade": "mH",
+            "posicao": "Ramo Paralelo A",
+        },
+        {
+            "tipo": "Capacitor",
+            "valor": 30.01,
+            "unidade": "µF",
+            "posicao": "Ramo Paralelo B",
+        },
     ]
 
-# --- BARRA LATERAL: FONTE E TOPOLOGIA ---
+# --- BARRA LATERAL: FONTE DE ALIMENTAÇÃO ---
 st.sidebar.header("1. Fonte de Alimentação CA")
 V_rms = st.sidebar.number_input(
     "Tensão Eficaz V_rms (V)", value=100.0, step=1.0, min_value=0.1
@@ -36,99 +54,195 @@ f = st.sidebar.number_input(
 )
 w = 2 * np.pi * f
 
-st.sidebar.header("2. Topologia do Circuito")
-arranjo = st.sidebar.selectbox(
-    "Arranjo Estrutural",
-    [
-        "Série Puro",
-        "Paralelo Puro",
-        "Misto (Resistor em Série + Bloco Paralelo)",
-    ],
-)
+st.sidebar.header("2. Adicionar Novo Componente ao Circuito")
+opcoes_posicao = [
+    "Série (Linha Principal)",
+    "Ramo Paralelo A",
+    "Ramo Paralelo B",
+    "Ramo Paralelo C",
+]
 
-st.sidebar.header("3. Adicionar Elementos ao Circuito")
 with st.sidebar.form("add_comp_form", clear_on_submit=True):
     tipo_comp = st.selectbox(
-        "Selecione o Tipo de Elemento",
-        ["Resistor (R)", "Indutor (L)", "Capacitor (C)"],
+        "Tipo de Elemento", ["Resistor (R)", "Indutor (L)", "Capacitor (C)"]
     )
+    alocacao = st.selectbox("Alocação no Circuito", opcoes_posicao)
 
     if tipo_comp.startswith("Resistor"):
         val_default = 100.0
         unid = "Ω"
     elif tipo_comp.startswith("Indutor"):
-        val_default = 100.0
+        val_default = 312.0
         unid = "mH"
     else:
-        val_default = 10.0
+        val_default = 30.0
         unid = "µF"
 
-    submitted = st.form_submit_button("➕ Inserir Slot no Circuito")
+    submitted = st.form_submit_button("➕ Inserir no Circuito")
     if submitted:
         nome_tipo = tipo_comp.split(" ")[0]
         st.session_state.componentes.append(
-            {"tipo": nome_tipo, "valor": float(val_default), "unidade": unid}
+            {
+                "tipo": nome_tipo,
+                "valor": float(val_default),
+                "unidade": unid,
+                "posicao": alocacao,
+            }
         )
         st.rerun()
 
-# --- ETAPA 1: MONTAGEM E AJUSTE DINÂMICO DE VALORES ---
-st.subheader("🛠️ 1. Estrutura e Valores dos Componentes no Circuito")
+# --- PAINEL DE CONSTRUÇÃO E AJUSTE DA TOPOLOGIA ---
+st.subheader("🛠️ 1. Editor de Arranjo e Parâmetros dos Componentes")
 st.caption(
-    "Aloque os slots de componentes no circuito e utilize os controles interativos abaixo para ajustar os parâmetros em tempo real."
+    "Defina onde cada componente estará conectado no circuito e ajuste seus valores. O sistema reconhecerá automaticamente se o circuito é Série, Paralelo ou Misto."
 )
 
 if not st.session_state.componentes:
-    st.warning("Nenhum componente alocado. Adicione elementos pela barra lateral.")
+    st.warning(
+        "O circuito está vazio. Adicione componentes através do menu lateral."
+    )
     st.stop()
 
-# Ajuste individual por slot de componente
+# Exibição dos componentes e edição interativa
 cols = st.columns(min(len(st.session_state.componentes), 4))
 for idx, comp in enumerate(st.session_state.componentes):
     col_idx = idx % len(cols)
     with cols[col_idx]:
-        st.markdown(f"**Slot {idx+1}: {comp['tipo']}**")
-        if comp["tipo"] == "Resistor":
-            novo_val = st.slider(
-                f"Resistência (Ω) #{idx+1}",
-                min_value=1.0,
-                max_value=1000.0,
-                value=float(comp["valor"]),
-                step=1.0,
-                key=f"slider_{idx}",
-            )
-            comp["valor"] = novo_val
-        elif comp["tipo"] == "Indutor":
-            novo_val = st.slider(
-                f"Indutância (mH) #{idx+1}",
-                min_value=1.0,
-                max_value=1000.0,
-                value=float(comp["valor"]),
-                step=1.0,
-                key=f"slider_{idx}",
-            )
-            comp["valor"] = novo_val
-        elif comp["tipo"] == "Capacitor":
-            novo_val = st.slider(
-                f"Capacitância (µF) #{idx+1}",
-                min_value=0.1,
-                max_value=500.0,
-                value=float(comp["valor"]),
-                step=0.1,
-                key=f"slider_{idx}",
-            )
-            comp["valor"] = novo_val
+        st.markdown(f"### Componente #{idx+1}")
+        comp["tipo"] = st.selectbox(
+            "Tipo",
+            ["Resistor", "Indutor", "Capacitor"],
+            index=["Resistor", "Indutor", "Capacitor"].index(comp["tipo"]),
+            key=f"tipo_{idx}",
+        )
+        comp["posicao"] = st.selectbox(
+            "Alocação",
+            opcoes_posicao,
+            index=opcoes_posicao.index(comp["posicao"])
+            if comp["posicao"] in opcoes_posicao
+            else 0,
+            key=f"pos_{idx}",
+        )
 
-        if st.button("🗑️ Remover Slot", key=f"del_{idx}"):
+        if comp["tipo"] == "Resistor":
+            comp["unidade"] = "Ω"
+            comp["valor"] = st.number_input(
+                "Resistência (Ω)",
+                value=float(comp["valor"]),
+                min_value=0.1,
+                step=1.0,
+                key=f"val_{idx}",
+            )
+        elif comp["tipo"] == "Indutor":
+            comp["unidade"] = "mH"
+            comp["valor"] = st.number_input(
+                "Indutância (mH)",
+                value=float(comp["valor"]),
+                min_value=0.1,
+                step=1.0,
+                key=f"val_{idx}",
+            )
+        else:
+            comp["unidade"] = "µF"
+            comp["valor"] = st.number_input(
+                "Capacitância (µF)",
+                value=float(comp["valor"]),
+                min_value=0.01,
+                step=1.0,
+                key=f"val_{idx}",
+            )
+
+        if st.button("🗑️ Remover", key=f"del_{idx}"):
             st.session_state.componentes.pop(idx)
             st.rerun()
 
 
-# --- FUNÇÃO DE DESENHO NORMALIZADO DO CIRCUITO (ESQUEMÁTICO MATPLOTLIB) ---
-def desenhar_esquematico(componentes, modo_arranjo, tensao):
-    fig_esq, ax_esq = plt.subplots(figsize=(8, 2.6))
+# --- PROCESSAMENTO AUTOMÁTICO DA TOPOLOGIA E CÁLCULO DE IMPEDÂNCIA ---
+def calcular_impedancia_elemento(comp, frequency_w):
+    val = comp["valor"]
+    if comp["tipo"] == "Resistor":
+        return complex(val, 0)
+    elif comp["tipo"] == "Indutor":
+        L = val / 1000.0
+        return complex(0, frequency_w * L)
+    elif comp["tipo"] == "Capacitor":
+        C = val / 1e6
+        return complex(0, -1 / (frequency_w * C))
+
+
+# Separação dos componentes por ramo de alocação
+elementos_serie = [
+    c
+    for c in st.session_state.componentes
+    if c["posicao"] == "Série (Linha Principal)"
+]
+ramos_paralelos = {}
+for c in st.session_state.componentes:
+    if c["posicao"] != "Série (Linha Principal)":
+        nome_ramo = c["posicao"]
+        if nome_ramo not in ramos_paralelos:
+            ramos_paralelos[nome_ramo] = []
+        ramos_paralelos[nome_ramo].append(c)
+
+# Identificação da topologia equivalente
+if elementos_serie and ramos_paralelos:
+    topologia_detectada = (
+        "Misto (Elementos em Série + Bloco em Paralelo Dividido)"
+    )
+elif elementos_serie and not ramos_paralelos:
+    topologia_detectada = "Série Puro"
+elif not elementos_serie and ramos_paralelos:
+    topologia_detectada = "Paralelo Puro"
+else:
+    st.error("Adicione componentes para formar o circuito.")
+    st.stop()
+
+# Cálculo da Impedância Equivalente Dinâmica Z_eq
+try:
+    Z_serie_total = sum(
+        calcular_impedancia_elemento(c, w) for c in elementos_serie
+    )
+
+    if ramos_paralelos:
+        admitancia_paralela_total = complex(0, 0)
+        for nome_ramo, comps_ramo in ramos_paralelos.items():
+            Z_ramo = sum(
+                calcular_impedancia_elemento(c, w) for c in comps_ramo
+            )
+            admitancia_paralela_total += 1 / Z_ramo
+        Z_paralelo_total = 1 / admitancia_paralela_total
+    else:
+        Z_paralelo_total = complex(0, 0)
+
+    Z_eq = Z_serie_total + Z_paralelo_total
+except ZeroDivisionError:
+    st.error("Erro de divisão por zero: verifique a combinação de reatâncias.")
+    st.stop()
+
+# --- CÁLCULO DAS GRANDEZAS ELÉTRICAS ---
+abs_Z = abs(Z_eq)
+angle_Z_rad = cmath.phase(Z_eq)
+angle_Z_deg = np.degrees(angle_Z_rad)
+
+I_rms = V_rms / abs_Z
+angle_I_deg = -angle_Z_deg
+
+S = V_rms * I_rms
+P = S * np.cos(angle_Z_rad)
+Q = S * np.sin(angle_Z_rad)
+FP = np.cos(angle_Z_rad)
+carater = (
+    "Indutivo" if Q > 0.01 else "Capacitivo" if Q < -0.01 else "Resistivo Puro"
+)
+
+
+# --- DESENHO AUTOMÁTICO DO ESQUEMÁTICO DO CIRCUITO MONTADO ---
+def desenhar_esquematico_dinamico(elem_s, ramos_p, tensao):
+    fig_esq, ax_esq = plt.subplots(figsize=(8.5, 3.0))
     ax_esq.set_aspect("equal")
     ax_esq.axis("off")
 
+    # Fonte de Tensão CA
     ax_esq.add_patch(
         patches.Circle((-1, 2), 0.4, fill=False, color="red", lw=2)
     )
@@ -147,11 +261,11 @@ def desenhar_esquematico(componentes, modo_arranjo, tensao):
     ax_esq.plot([-1, -1, 0], [1.6, 0, 0], color="black", lw=2)
     ax_esq.plot([-1, -1, 0], [2.4, 4, 4], color="black", lw=2)
 
-    n_comp = len(componentes)
-    if modo_arranjo == "Série Puro":
-        x_step = 6.0 / max(n_comp, 1)
-        x_curr = 0.0
-        for comp in componentes:
+    # Desenho dos elementos em série
+    x_curr = 0.0
+    if elem_s:
+        x_step = 3.0 / len(elem_s)
+        for comp in elem_s:
             x_next = x_curr + x_step
             ax_esq.plot([x_curr, x_next], [4, 4], color="black", lw=2)
             rect = patches.Rectangle(
@@ -163,168 +277,75 @@ def desenhar_esquematico(componentes, modo_arranjo, tensao):
                 lw=2,
             )
             ax_esq.add_patch(rect)
-            lbl = "Ω" if comp["unidade"] == "Ω" else comp["unidade"]
             ax_esq.text(
                 x_curr + x_step * 0.5,
-                4,
-                f"{comp['tipo'][0]}:{comp['valor']:.1f}{lbl}",
+                4.0,
+                f"{comp['tipo'][0]}:{comp['valor']}{comp['unidade']}",
                 fontsize=8,
                 ha="center",
                 va="center",
                 weight="bold",
             )
             x_curr = x_next
-        ax_esq.plot([x_curr, x_curr], [4, 0], color="black", lw=2)
-        ax_esq.plot([0, x_curr], [0, 0], color="black", lw=2)
-    elif modo_arranjo == "Paralelo Puro":
-        x_step = 6.0 / max(n_comp, 1)
-        ax_esq.plot([0, 6], [4, 4], color="black", lw=2)
-        ax_esq.plot([0, 6], [0, 0], color="black", lw=2)
-        for i, comp in enumerate(componentes):
-            x_pos = (i + 0.5) * x_step
+    else:
+        ax_esq.plot([0, 3.0], [4, 4], color="black", lw=2)
+        x_curr = 3.0
+
+    # Desenho do bloco paralelo
+    if ramos_p:
+        ax_esq.plot([x_curr, x_curr + 4.0], [4, 4], color="black", lw=2)
+        ax_esq.plot([0, x_curr + 4.0], [0, 0], color="black", lw=2)
+
+        n_ramos = len(ramos_p)
+        x_step_p = 4.0 / n_ramos
+        for i, (nome_ramo, comps) in enumerate(ramos_p.items()):
+            x_pos = x_curr + (i + 0.5) * x_step_p
             ax_esq.plot([x_pos, x_pos], [4, 2.5], color="black", lw=2)
             ax_esq.plot([x_pos, x_pos], [1.5, 0], color="black", lw=2)
+
             rect = patches.Rectangle(
-                (x_pos - 0.4, 1.5),
-                0.8,
+                (x_pos - 0.5, 1.5),
+                1.0,
                 1.0,
                 facecolor="whitesmoke",
                 edgecolor="darkgreen",
                 lw=2,
             )
             ax_esq.add_patch(rect)
-            lbl = "Ω" if comp["unidade"] == "Ω" else comp["unidade"]
-            ax_esq.text(
-                x_pos,
-                2.0,
-                f"{comp['tipo'][0]}\n{comp['valor']:.1f}{lbl}",
-                fontsize=8,
-                ha="center",
-                va="center",
-                weight="bold",
-            )
-    elif modo_arranjo == "Misto (Resistor em Série + Bloco Paralelo)":
-        res_list = [c for c in componentes if c["tipo"] == "Resistor"]
-        reat_list = [c for c in componentes if c["tipo"] != "Resistor"]
-        ax_esq.plot([0, 2], [4, 4], color="black", lw=2)
-        rect_r = patches.Rectangle(
-            (0.5, 3.6),
-            1.0,
-            0.8,
-            facecolor="whitesmoke",
-            edgecolor="darkorange",
-            lw=2,
-        )
-        ax_esq.add_patch(rect_r)
-        lbl_r = f"R:{res_list[0]['valor']:.1f}Ω" if res_list else "R_série"
-        ax_esq.text(
-            1.0,
-            4.0,
-            lbl_r,
-            fontsize=8,
-            ha="center",
-            va="center",
-            weight="bold",
-        )
-        ax_esq.plot([2, 6], [4, 4], color="black", lw=2)
-        ax_esq.plot([0, 6], [0, 0], color="black", lw=2)
-        n_r = len(reat_list) if reat_list else 1
-        x_step = 4.0 / n_r
-        for i, comp in enumerate(reat_list):
-            x_pos = 2 + (i + 0.5) * x_step
-            ax_esq.plot([x_pos, x_pos], [4, 2.5], color="black", lw=2)
-            ax_esq.plot([x_pos, x_pos], [1.5, 0], color="black", lw=2)
-            rect = patches.Rectangle(
-                (x_pos - 0.4, 1.5),
-                0.8,
-                1.0,
-                facecolor="whitesmoke",
-                edgecolor="purple",
-                lw=2,
-            )
-            ax_esq.add_patch(rect)
-            lbl = "Ω" if comp["unidade"] == "Ω" else comp["unidade"]
-            ax_esq.text(
-                x_pos,
-                2.0,
-                f"{comp['tipo'][0]}\n{comp['valor']:.1f}{lbl}",
-                fontsize=8,
-                ha="center",
-                va="center",
-                weight="bold",
-            )
-        ax_esq.plot([6, 6], [4, 0], color="black", lw=2)
 
-    ax_esq.set_xlim(-2, 7)
+            lbl = "\n".join([f"{c['tipo'][0]}:{c['valor']}" for c in comps])
+            ax_esq.text(
+                x_pos,
+                2.0,
+                lbl,
+                fontsize=7,
+                ha="center",
+                va="center",
+                weight="bold",
+            )
+
+        ax_esq.plot(
+            [x_curr + 4.0, x_curr + 4.0], [4, 0], color="black", lw=2
+        )
+    else:
+        ax_esq.plot([x_curr, x_curr], [4, 0], color="black", lw=2)
+        ax_esq.plot([0, x_curr], [0, 0], color="black", lw=2)
+
+    ax_esq.set_xlim(-2, x_curr + 5.0)
     ax_esq.set_ylim(-0.5, 4.8)
     return fig_esq
 
 
-fig_esquematico = desenhar_esquematico(
-    st.session_state.componentes, arranjo, V_rms
+st.markdown("---")
+st.subheader("🔌 Esquemático do Circuito Montado")
+st.caption(f"Topologia Detectada: **{topologia_detectada}**")
+fig_esquematico = desenhar_esquematico_dinamico(
+    elementos_serie, ramos_paralelos, V_rms
 )
 st.pyplot(fig_esquematico)
 
-
-# --- MOTOR DE CÁLCULO ELETRÔNICO ---
-def calcular_impedancia_item(comp, frequency_w):
-    val = comp["valor"]
-    if comp["tipo"] == "Resistor":
-        return complex(val, 0)
-    elif comp["tipo"] == "Indutor":
-        L = val / 1000.0
-        return complex(0, frequency_w * L)
-    elif comp["tipo"] == "Capacitor":
-        C = val / 1e6
-        return complex(0, -1 / (frequency_w * C))
-
-
-try:
-    if arranjo == "Série Puro":
-        Z_eq = sum(
-            calcular_impedancia_item(c, w)
-            for c in st.session_state.componentes
-        )
-    elif arranjo == "Paralelo Puro":
-        Y_total = sum(
-            1 / calcular_impedancia_item(c, w)
-            for c in st.session_state.componentes
-        )
-        Z_eq = 1 / Y_total
-    elif arranjo == "Misto (Resistor em Série + Bloco Paralelo)":
-        res_list = [
-            c for c in st.session_state.componentes if c["tipo"] == "Resistor"
-        ]
-        reat_list = [
-            c for c in st.session_state.componentes if c["tipo"] != "Resistor"
-        ]
-        if not res_list or not reat_list:
-            st.error(
-                "Para o arranjo Misto, adicione pelo menos 1 Resistor e 1 elemento reativo (L ou C)."
-            )
-            st.stop()
-        Z_s = sum(calcular_impedancia_item(r, w) for r in res_list)
-        Y_p = sum(1 / calcular_impedancia_item(c, w) for c in reat_list)
-        Z_eq = Z_s + (1 / Y_p)
-except ZeroDivisionError:
-    st.error("Erro de divisão por zero na combinação do circuito.")
-    st.stop()
-
-# --- CÁLCULO DE GRANDEZAS E POTÊNCIAS ---
-abs_Z = abs(Z_eq)
-angle_Z_rad = cmath.phase(Z_eq)
-angle_Z_deg = np.degrees(angle_Z_rad)
-
-I_rms = V_rms / abs_Z
-angle_I_deg = -angle_Z_deg
-
-S = V_rms * I_rms
-P = S * np.cos(angle_Z_rad)
-Q = S * np.sin(angle_Z_rad)
-FP = np.cos(angle_Z_rad)
-
-st.markdown("---")
-st.subheader("📊 2. Resultados Numéricos do Circuito")
+# --- RESULTADOS NUMÉRICOS ---
+st.subheader("📊 Resultados Numéricos")
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Impedância |Z_eq|", f"{abs_Z:.2f} Ω")
 m2.metric("Corrente Total |I|", f"{I_rms:.2f} A")
@@ -332,9 +353,6 @@ m3.metric("Potência Ativa (P)", f"{P:.2f} W")
 m4.metric("Fator de Potência", f"{FP:.4f}")
 
 r1, r2 = st.columns(2)
-carater = (
-    "Indutivo" if Q > 0.01 else "Capacitivo" if Q < -0.01 else "Resistivo Puro"
-)
 with r1:
     st.write(f"**Ângulo da Impedância ($\theta$):** {angle_Z_deg:.2f}°")
     st.write(f"**Potência Reativa (Q):** {Q:.2f} VAR")
@@ -342,9 +360,9 @@ with r2:
     st.write(f"**Potência Aparente (S):** {S:.2f} VA")
     st.write(f"**Comportamento Predominante:** {carater}")
 
-# --- ETAPA 2: DIAGRAMA FASORIAL E TRIÂNGULO DE POTÊNCIAS (VETORES QUIVER) ---
+# --- DIAGRAMAS FASORIAIS E DE POTÊNCIA ---
 st.markdown("---")
-st.subheader("📐 3. Diagramas Vectoriais (Fasores e Potências)")
+st.subheader("📐 Diagramas Fasoriais e Triângulo de Potências")
 g1, g2 = st.columns(2)
 
 with g1:
@@ -352,7 +370,6 @@ with g1:
     fig_fasor, ax_f = plt.subplots(figsize=(4.5, 4.5))
     escala_I = (V_rms / I_rms) * 0.4 if I_rms > 0 else 1.0
 
-    # VETOR TENSÃO
     ax_f.quiver(
         0,
         0,
@@ -364,7 +381,6 @@ with g1:
         color="red",
         label=f"V = {V_rms:.1f}V ∠0°",
     )
-    # VETOR CORRENTE
     u_I = (I_rms * escala_I) * np.cos(np.radians(angle_I_deg))
     v_I = (I_rms * escala_I) * np.sin(np.radians(angle_I_deg))
     ax_f.quiver(
@@ -438,14 +454,13 @@ with g2:
     ax_p.legend(loc="upper left", fontsize=8)
     st.pyplot(fig_pot)
 
-# --- FORMAS DE ONDA NO TEMPO E VARREDURA DE FREQUÊNCIA ---
+# --- OSCILOSCÓPIO NO TEMPO E VARREDURA BODE ---
 st.markdown("---")
-st.subheader("📺 4. Análise Temporal e Frequencial")
+st.subheader("📺 Osciloscópio Virtual e Varredura de Frequência")
+col_w1, col_w2 = st.columns(2)
 
-col_wave1, col_wave2 = st.columns(2)
-
-with col_wave1:
-    st.markdown("**Osciloscópio Virtual: v(t) e i(t)**")
+with col_w1:
+    st.markdown("**Formas de Onda no Tempo: v(t) e i(t)**")
     t = np.linspace(0, 2 / f, 500)
     V_pico = V_rms * np.sqrt(2)
     I_pico = I_rms * np.sqrt(2)
@@ -481,8 +496,8 @@ with col_wave1:
     ax_osc.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper right")
     st.pyplot(fig_osc)
 
-with col_wave2:
-    st.markdown("**Resposta em Frequência (Bode)**")
+with col_w2:
+    st.markdown("**Resposta em Frequência (|Z| e Fase)**")
     freq_array = np.logspace(1, 5, 200)
     z_sweep = []
     phase_sweep = []
@@ -490,33 +505,20 @@ with col_wave2:
     for f_i in freq_array:
         w_i = 2 * np.pi * f_i
         try:
-            if arranjo == "Série Puro":
-                Z_i = sum(
-                    calcular_impedancia_item(c, w_i)
-                    for c in st.session_state.componentes
+            Z_s_i = sum(
+                calcular_impedancia_elemento(c, w_i) for c in elementos_serie
+            )
+            if ramos_paralelos:
+                Y_p_i = sum(
+                    1 / sum(calcular_impedancia_elemento(c, w_i) for c in comps)
+                    for comps in ramos_paralelos.values()
                 )
-            elif arranjo == "Paralelo Puro":
-                Y_i = sum(
-                    1 / calcular_impedancia_item(c, w_i)
-                    for c in st.session_state.componentes
-                )
-                Z_i = 1 / Y_i
+                Z_p_i = 1 / Y_p_i
             else:
-                res_l = [
-                    c
-                    for c in st.session_state.componentes
-                    if c["tipo"] == "Resistor"
-                ]
-                reat_l = [
-                    c
-                    for c in st.session_state.componentes
-                    if c["tipo"] != "Resistor"
-                ]
-                Z_s = sum(calcular_impedancia_item(r, w_i) for r in res_l)
-                Y_p = sum(1 / calcular_impedancia_item(c, w_i) for c in reat_l)
-                Z_i = Z_s + (1 / Y_p)
-            z_sweep.append(abs(Z_i))
-            phase_sweep.append(np.degrees(cmath.phase(Z_i)))
+                Z_p_i = complex(0, 0)
+            Z_tot_i = Z_s_i + Z_p_i
+            z_sweep.append(abs(Z_tot_i))
+            phase_sweep.append(np.degrees(cmath.phase(Z_tot_i)))
         except ZeroDivisionError:
             z_sweep.append(0)
             phase_sweep.append(0)
@@ -534,14 +536,14 @@ with col_wave2:
 
     st.pyplot(fig_bode)
 
-# --- ETAPA 3: GERAÇÃO DO RELATÓRIO PDF COM GRÁFICOS EMBUTIDOS ---
+# --- EMISSÃO E DOWNLOAD DO RELATÓRIO PDF COMPLETO ---
 st.markdown("---")
-st.subheader("📄 5. Emissão e Exportação do Relatório Técnico")
+st.subheader("📄 Relatório Técnico para Exportação")
 
 
 def gerar_relatorio_texto(
     componentes,
-    modo_arranjo,
+    topologia,
     tensao,
     freq,
     z_complex,
@@ -572,12 +574,12 @@ Data de Geracao: {agora}
 
 2. TOPOLOGIA E COMPONENTES DO CIRCUITO
 {div_sub}
-- Topologia Selecionada: {modo_arranjo}
-- Lista de Componentes do Circuito:
+- Topologia Detectada: {topologia}
+- Lista de Componentes Alocados:
 """
     for i, c in enumerate(componentes, 1):
         unidade_limpa = "Ohm" if c["unidade"] == "Ω" else c["unidade"]
-        texto += f"   [{i}] {c['tipo']}: {c['valor']:.2f} {unidade_limpa}\n"
+        texto += f"   [{i}] {c['tipo']} ({c['posicao']}): {c['valor']:.2f} {unidade_limpa}\n"
 
     texto += f"""
 3. RESULTADOS DOS CALCULOS ELETRONICOS
@@ -594,7 +596,7 @@ Data de Geracao: {agora}
 - Comportamento Predominante: {natureza}
 
 {div_main}
-Gerado automaticamente pelo Simulador de Circuitos RLC
+Gerado automaticamente pelo Simulador RLC
 {div_main}
 """
     return texto
@@ -607,7 +609,7 @@ def gerar_pdf_completo_bytes(
     pdf.set_margins(15, 15, 15)
     pdf.set_auto_page_break(auto=True, margin=15)
 
-    # Página 1: Dados e Cálculos
+    # Página 1: Texto e Resultados
     pdf.add_page()
     pdf.set_font("Courier", size=9)
     for line in texto.split("\n"):
@@ -625,13 +627,11 @@ def gerar_pdf_completo_bytes(
     pdf.set_font("Courier", style="B", size=11)
     pdf.cell(0, 8, "ANEXO: DIAGRAMAS E GRAFICOS", new_x="LMARGIN", new_y="NEXT")
 
-    # Inserção do Esquemático
     buf_esq = io.BytesIO()
     fig_esq.savefig(buf_esq, format="png", dpi=130, bbox_inches="tight")
     buf_esq.seek(0)
     pdf.image(buf_esq, x=15, w=180)
 
-    # Inserção Fasor e Potência
     buf_fasor = io.BytesIO()
     fig_fasor.savefig(buf_fasor, format="png", dpi=130, bbox_inches="tight")
     buf_fasor.seek(0)
@@ -645,7 +645,6 @@ def gerar_pdf_completo_bytes(
     pdf.image(buf_fasor, x=15, y=y_pos, w=85)
     pdf.image(buf_pot, x=105, y=y_pos, w=85)
 
-    # Inserção Osciloscópio e Bode
     buf_osc = io.BytesIO()
     fig_osc.savefig(buf_osc, format="png", dpi=130, bbox_inches="tight")
     buf_osc.seek(0)
@@ -664,7 +663,7 @@ def gerar_pdf_completo_bytes(
 
 relatorio_gerado = gerar_relatorio_texto(
     st.session_state.componentes,
-    arranjo,
+    topologia_detectada,
     V_rms,
     f,
     Z_eq,
@@ -692,7 +691,7 @@ with col_dl1:
     st.download_button(
         label="📥 Baixar PDF com Gráficos (.pdf)",
         data=pdf_bytes,
-        file_name=f"relatorio_rlc_completo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+        file_name=f"relatorio_rlc_dinamico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
         mime="application/pdf",
     )
 
