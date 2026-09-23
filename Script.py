@@ -1,152 +1,225 @@
 import cmath
 from datetime import datetime
 import io
+import matplotlib.patches as patches
+import matplotlib.path as mpath
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+import pandas as pd
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
 from fpdf import FPDF
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Simulador RLC - Quadro de Desenho Interativo",
+    page_title="Simulador RLC - Símbolos Esquemáticos",
     page_icon="⚡",
     layout="wide",
 )
 
-st.title("⚡ Simulador RLC: Desenho no Quadro e Cálculo Automático")
+st.title("⚡ Simulador RLC: Esquema com Símbolos Elétricos Padrão")
 st.caption(
-    "Selecione o componente no menu lateral, clique e arraste o mouse no quadro para desenhar as conexões. "
-    "O Python lê os traços da tela em tempo real para realizar a análise nodal e os cálculos elétricos."
+    "Monte as conexões na tabela abaixo informando os nós de cada componente. "
+    "O circuito será renderizado com os símbolos esquemáticos normais (R, L, C, Fonte CA e Fio) e calculado em tempo real."
 )
 
-# --- MAPA DE FERRAMENTAS E CORES ---
-FERRAMENTAS = {
-    "✏️ Fio (Conexão)": {"cor": "#28a745", "tipo": "Fio (Wire)", "val_def": 0.0, "unid": ""},
-    "⚡ Resistor (R)": {"cor": "#007bff", "tipo": "Resistor", "val_def": 100.0, "unid": "Ω"},
-    "🌀 Indutor (L)": {"cor": "#6f42c1", "tipo": "Indutor", "val_def": 312.0, "unid": "mH"},
-    "🔋 Capacitor (C)": {"cor": "#fd7e14", "tipo": "Capacitor", "val_def": 30.01, "unid": "µF"},
-    "🔴 Fonte CA (V)": {"cor": "#dc3545", "tipo": "Fonte CA", "val_def": 127.0, "unid": "V"},
-}
+# --- CIRCUITOS PRÉ-CONFIGURADOS ---
+if "netlist_df" not in st.session_state:
+    st.session_state.netlist_df = pd.DataFrame(
+        [
+            {"ID": 1, "Tipo": "Fonte CA", "Nó A": 0, "Nó B": 1, "Valor": 127.0, "Unidade": "V"},
+            {"ID": 2, "Tipo": "Resistor", "Nó A": 1, "Nó B": 0, "Valor": 100.0, "Unidade": "Ω"},
+            {"ID": 3, "Tipo": "Resistor", "Nó A": 1, "Nó B": 0, "Valor": 100.0, "Unidade": "Ω"},
+            {"ID": 4, "Tipo": "Indutor", "Nó A": 1, "Nó B": 0, "Valor": 312.0, "Unidade": "mH"},
+            {"ID": 5, "Tipo": "Capacitor", "Nó A": 1, "Nó B": 0, "Valor": 30.0, "Unidade": "µF"},
+        ]
+    )
 
-# --- BARRA LATERAL: SELEÇÃO DE FERRAMENTAS E PARÂMETROS ---
-st.sidebar.header("🎨 Ferramentas de Desenho")
-ferramenta_sel = st.sidebar.radio("Escolha o Componente para Desenhar:", list(FERRAMENTAS.keys()))
-info_tool = FERRAMENTAS[ferramenta_sel]
-
-st.sidebar.markdown("---")
+# --- BARRA LATERAL: PARAMETROS DE ENERGIA ---
 st.sidebar.header("⚙️ Parâmetros Globais")
 freq = st.sidebar.number_input("Frequência f (Hz)", value=60.0, min_value=0.1, step=1.0)
 omega = 2 * np.pi * freq
 
-# --- QUADRO DE DESENHO INTERATIVO (CANVAS) ---
-st.subheader("🖥️ Quadro Interativo de Desenho")
-st.caption(
-    f"Ferramenta Ativa: **{ferramenta_sel}** (Cor da linha: `{info_tool['cor']}`). "
-    "Conecte os pontos da grade para formar o circuito."
+# --- EDITOR DE CIRCUITO POR NÓS ---
+st.subheader("📋 Tabela de Componentes e Nós do Circuito")
+st.caption("Adicione, remova ou modifique as conexões entre os nós. O desenho e a análise serão atualizados instantaneamente.")
+
+edited_df = st.data_editor(
+    st.session_state.netlist_df,
+    num_rows="dynamic",
+    use_container_width=True,
+    column_config={
+        "Tipo": st.column_config.SelectboxColumn(
+            "Tipo de Componente",
+            options=["Fonte CA", "Resistor", "Indutor", "Capacitor", "Fio (Wire)"],
+            required=True,
+        ),
+        "Nó A": st.column_config.NumberColumn("Nó Origem (A)", min_value=0, max_value=50, step=1),
+        "Nó B": st.column_config.NumberColumn("Nó Destino (B)", min_value=0, max_value=50, step=1),
+        "Valor": st.column_config.NumberColumn("Valor Numérico", min_value=0.0, step=1.0),
+        "Unidade": st.column_config.TextColumn("Unidade", disabled=True),
+    },
+    key="editor_simbolos",
 )
 
-canvas_result = st_canvas(
-    fill_color="rgba(0, 0, 0, 0)",
-    stroke_width=3,
-    stroke_color=info_tool["cor"],
-    background_color="#f8f9fa",
-    height=400,
-    width=800,
-    drawing_mode="line",
-    key="quadro_rlc",
-)
-
-# --- RECONHECIMENTO AUTOMÁTICO DOS COMPONENTES DESENHADOS ---
-netlist = []
-grid_size = 30  # Tamanho do grid em pixels para atração dos nós
-
-if canvas_result.json_data is not None:
-    objects = canvas_result.json_data.get("objects", [])
-
-    for idx, obj in enumerate(objects):
-        if obj.get("type") == "line":
-            x1 = round(obj["x1"] / grid_size) * grid_size
-            y1 = round(obj["y1"] / grid_size) * grid_size
-            x2 = round(obj["x2"] / grid_size) * grid_size
-            y2 = round(obj["y2"] / grid_size) * grid_size
-
-            # Identificação dos nós por coordenadas snapped na grade
-            no_a = f"N_{int(x1//grid_size)}_{int(y1//grid_size)}"
-            no_b = f"N_{int(x2//grid_size)}_{int(y2//grid_size)}"
-
-            # Corresponde a cor da linha ao tipo do componente
-            cor_linha = obj.get("stroke")
-            tipo_detectado = "Fio (Wire)"
-            val_def = 0.0
-            unid_def = ""
-
-            for key, val in FERRAMENTAS.items():
-                if val["cor"].lower() == str(cor_linha).lower():
-                    tipo_detectado = val["tipo"]
-                    val_def = val["val_def"]
-                    unid_def = val["unid"]
-                    break
-
-            netlist.append({
-                "id": idx + 1,
-                "tipo": tipo_detectado,
-                "no_a": no_a,
-                "no_b": no_b,
-                "valor": val_def,
-                "unid": unid_def,
-            })
-
-st.markdown("---")
-st.subheader("⚙️ Configurações e Análise do Circuito Desenhado")
+st.session_state.netlist_df = edited_df
+netlist = edited_df.to_dict(orient="records")
 
 if not netlist:
-    st.info("💡 Desenhe o circuito no quadro acima (incluindo uma Fonte CA, componentes e Fios) para realizar os cálculos.")
+    st.warning("Adicione componentes na tabela para visualizar o circuito.")
     st.stop()
 
-# --- AJUSTE DE VALORES DOS COMPONENTES DESENHADOS ---
-st.markdown("**Componentes Detectados no Quadro:**")
-cols = st.columns(min(len(netlist), 4))
 
-for idx, item in enumerate(netlist):
-    col_target = cols[idx % len(cols)]
-    with col_target:
-        st.markdown(f"**Slot #{item['id']}: {item['tipo']}**")
-        st.caption(f"Conectado entre `{item['no_a']}` e `{item['no_b']}`")
-        if item["tipo"] != "Fio (Wire)":
-            item["valor"] = st.number_input(
-                f"Valor ({item['unid']})",
-                value=float(item["valor"]),
-                min_value=0.01 if item["tipo"] != "Fonte CA" else 0.1,
-                key=f"val_canvas_{idx}"
-            )
+# --- DESENHADORES DE SÍMBOLOS ELÉTRICOS NORMAIS ---
+def desenhar_simbolo_componente(ax, p1, p2, tipo, rotulo):
+    """Desenha os símbolos elétricos padrão no gráfico (zigue-zague, espiral, placas, fonte ca)."""
+    x1, y1 = p1
+    x2, y2 = p2
+    dx, dy = x2 - x1, y2 - y1
+    dist = np.hypot(dx, dy)
+    if dist == 0:
+        return
+
+    # Ângulo da linha
+    angle = np.arctan2(dy, dx)
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+
+    # Função para converter coordenadas locais no vetor do componente para coordenadas globais
+    def to_global(lx, ly):
+        gx = x1 + lx * cos_a - ly * sin_a
+        gy = y1 + lx * sin_a + ly * cos_a
+        return gx, gy
+
+    # Desenha fio de conexão de suporte
+    ax.plot([x1, x2], [y1, y2], color="black", lw=1.5, zorder=1)
+
+    # Ponto central para posicionamento do símbolo
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+
+    if tipo == "Resistor":
+        # Símbolo Zigue-Zague
+        w_res = min(0.35 * dist, 0.4)
+        h_res = 0.12
+        pts_local = [
+            (0, 0), (cx_loc := (dist - w_res) / 2, 0),
+            (cx_loc + w_res * 0.125, h_res),
+            (cx_loc + w_res * 0.375, -h_res),
+            (cx_loc + w_res * 0.625, h_res),
+            (cx_loc + w_res * 0.875, -h_res),
+            (cx_loc + w_res, 0), (dist, 0)
+        ]
+        gx_pts, gy_pts = zip(*[to_global(lx, ly) for lx, ly in pts_local])
+        ax.plot(gx_pts, gy_pts, color="black", lw=2, zorder=3)
+
+    elif tipo == "Capacitor":
+        # Símbolo Placas Paralelas
+        gap = 0.08
+        h_cap = 0.2
+        c_mid = dist / 2
+        # Placa 1
+        p1_a, p1_b = to_global(c_mid - gap, h_cap), to_global(c_mid - gap, -h_cap)
+        # Placa 2
+        p2_a, p2_b = to_global(c_mid + gap, h_cap), to_global(c_mid + gap, -h_cap)
+
+        ax.plot([p1_a[0], p1_b[0]], [p1_a[1], p1_b[1]], color="black", lw=2.5, zorder=3)
+        ax.plot([p2_a[0], p2_b[0]], [p2_a[1], p2_b[1]], color="black", lw=2.5, zorder=3)
+
+    elif tipo == "Indutor":
+        # Símbolo Espiral / Semicírculos
+        w_ind = min(0.4 * dist, 0.5)
+        c_start = (dist - w_ind) / 2
+        n_loops = 4
+        r_loop = w_ind / (2 * n_loops)
+
+        t = np.linspace(0, np.pi, 30)
+        for i in range(n_loops):
+            x_off = c_start + i * (2 * r_loop) + r_loop
+            lx = x_off - r_loop * np.cos(t)
+            ly = r_loop * np.sin(t)
+            g_x, g_y = zip(*[to_global(x, y) for x, y in zip(lx, ly)])
+            ax.plot(g_x, g_y, color="black", lw=2, zorder=3)
+
+    elif tipo == "Fonte CA":
+        # Símbolo Círculo com onda senoidal interna (~)
+        r_src = 0.18
+        circle = patches.Circle((cx, cy), r_src, facecolor="white", edgecolor="black", lw=2, zorder=3)
+        ax.add_patch(circle)
+
+        # Onda senoidal interna
+        t_s = np.linspace(-np.pi, np.pi, 25)
+        lx_s = (t_s / np.pi) * (r_src * 0.6) + (dist / 2)
+        ly_s = np.sin(t_s) * (r_src * 0.4)
+        g_xs, g_ys = zip(*[to_global(x, y) for x, y in zip(lx_s, ly_s)])
+        ax.plot(g_xs, g_ys, color="black", lw=1.8, zorder=4)
+
+    # Rótulo com identificação e valor numérico
+    if tipo != "Fio (Wire)":
+        off_y = 0.25
+        lbl_x, lbl_y = to_global(dist / 2, off_y)
+        ax.text(
+            lbl_x, lbl_y, rotulo,
+            fontsize=9, fontweight="bold", ha="center", va="center",
+            bbox=dict(boxstyle="round,pad=0.2", facecolor="#f8f9fa", edgecolor="gray", alpha=0.9),
+            zorder=5
+        )
 
 
-# --- MOTOR DE CÁLCULO NODAL (MNA / ANÁLISE DE GRAFOS) ---
-def analisar_circuito_desenhado(netlist_data, w):
+def renderizar_esquematico_simbolos(netlist_data):
+    """Renderiza a topologia do circuito com os símbolos elétricos correspondentes."""
     G = nx.MultiGraph()
     for item in netlist_data:
-        G.add_edge(item["no_a"], item["no_b"], key=item["id"], data=item)
+        G.add_edge(item["Nó A"], item["Nó B"], key=item["ID"], data=item)
 
-    fontes = [i for i in netlist_data if i["tipo"] == "Fonte CA"]
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    pos = nx.spring_layout(G, seed=15, k=1.2)
+
+    # Desenha nós numerados
+    for node, (nx_x, ny_y) in pos.items():
+        ax.scatter(nx_x, ny_y, s=350, color="#007bff", zorder=6, edgecolors="black")
+        ax.text(nx_x, ny_y, f"N{node}", color="white", fontweight="bold", ha="center", va="center", fontsize=10, zorder=7)
+
+    # Desenha os componentes e seus símbolos esquemáticos
+    for u, v, k, d in G.edges(keys=True, data=True):
+        elem = d["data"]
+        p1, p2 = pos[u], pos[v]
+        unid_str = elem.get("Unidade", "")
+        rotulo = f"{elem['Tipo']}\n{elem['Valor']}{unid_str}" if elem["Tipo"] != "Fio (Wire)" else "Fio"
+        desenhar_simbolo_componente(ax, p1, p2, elem["Tipo"], rotulo)
+
+    ax.axis("off")
+    plt.title("Esquema Elétrico Renderizado com Símbolos Normais (R, L, C, V)", fontsize=11, fontweight="bold")
+    return fig
+
+
+st.markdown("---")
+st.subheader("🖥️ Esquema Elétrico em Símbolos Normalizados")
+st.pyplot(renderizar_esquematico_simbolos(netlist))
+
+
+# --- MOTOR DE CÁLCULO NODAL (MNA) ---
+def analisar_circuito(netlist_data, w):
+    G = nx.MultiGraph()
+    for item in netlist_data:
+        G.add_edge(item["Nó A"], item["Nó B"], key=item["ID"], data=item)
+
+    fontes = [i for i in netlist_data if i["Tipo"] == "Fonte CA"]
     if not fontes:
-        return "Sem Fonte", complex(0, 0), 127.0, "Adicione uma fonte CA."
+        return "Sem Fonte", complex(0, 0), 0.0, "Adicione uma fonte CA na tabela."
 
     fonte = fontes[0]
-    n_src1, n_src2 = fonte["no_a"], fonte["no_b"]
-    V_rms = fonte["valor"]
+    n_src1, n_src2 = fonte["Nó A"], fonte["Nó B"]
+    V_rms = fonte["Valor"]
 
     G_sem_fonte = G.copy()
     for u, v, k, d in list(G_sem_fonte.edges(keys=True, data=True)):
-        if d["data"]["tipo"] == "Fonte CA":
+        if d["data"]["Tipo"] == "Fonte CA":
             G_sem_fonte.remove_edge(u, v, key=k)
 
     if not nx.has_path(G_sem_fonte, n_src1, n_src2):
-        return "Circuito Aberto", complex(1e9, 0), V_rms, "Não há caminho fechado ligando a fonte."
+        return "Circuito Aberto", complex(1e9, 0), V_rms, "Não há caminho fechado ligando os nós da fonte."
 
     def calc_z_elem(elem, frequency_w):
-        t, v = elem["tipo"], elem["valor"]
+        t, v = elem["Tipo"], elem["Valor"]
         if t == "Resistor":
             return complex(v, 0)
         elif t == "Indutor":
@@ -164,11 +237,11 @@ def analisar_circuito_desenhado(netlist_data, w):
 
     Y = np.zeros((N, N), dtype=complex)
     for item in netlist_data:
-        if item["tipo"] == "Fonte CA":
+        if item["Tipo"] == "Fonte CA":
             continue
         z_item = calc_z_elem(item, w)
         y_item = 1.0 / z_item
-        u, v = node_map[item["no_a"]], node_map[item["no_b"]]
+        u, v = node_map[item["Nó A"]], node_map[item["Nó B"]]
         Y[u, u] += y_item
         Y[v, v] += y_item
         Y[u, v] -= y_item
@@ -187,12 +260,12 @@ def analisar_circuito_desenhado(netlist_data, w):
     except np.linalg.LinAlgError:
         Z_eq = complex(1e-6, 0)
 
-    return "Circuito Conectado", Z_eq, V_rms, "Sucesso"
+    return "Circuito Calculado", Z_eq, V_rms, "Sucesso"
 
 
-status_top, Z_eq, V_rms, msg = analisar_circuito_desenhado(netlist, omega)
+status_top, Z_eq, V_rms, msg = analisar_circuito(netlist, omega)
 
-# --- RESULTADOS DAS GRANDEZA ELÉTRICAS ---
+# --- RESULTADOS ELÉTRICOS CALCULADOS ---
 abs_Z = abs(Z_eq)
 angle_Z_rad = cmath.phase(Z_eq)
 angle_Z_deg = np.degrees(angle_Z_rad)
@@ -206,19 +279,30 @@ Q = S * np.sin(angle_Z_rad)
 FP = np.cos(angle_Z_rad)
 carater = "Indutivo" if Q > 0.01 else "Capacitivo" if Q < -0.01 else "Resistivo Puro"
 
+st.markdown("---")
+st.subheader("📊 Resultados Numéricos Calculados")
+
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Impedância |Z_eq|", f"{abs_Z:.2f} Ω")
-m2.metric("Corrente Total RMS |I|", f"{I_rms:.2f} A")
+m2.metric("Corrente Total |I_rms|", f"{I_rms:.2f} A")
 m3.metric("Potência Ativa (P)", f"{P:.2f} W")
 m4.metric("Fator de Potência (FP)", f"{FP:.4f}")
 
-# --- DIAGRAMA FASORIAL E TRIÂNGULO DE POTÊNCIA ---
+r1, r2 = st.columns(2)
+with r1:
+    st.write(f"**Ângulo da Impedância ($\theta_Z$):** {angle_Z_deg:.2f}°")
+    st.write(f"**Potência Reativa (Q):** {Q:.2f} VAR")
+with r2:
+    st.write(f"**Potência Aparente (S):** {S:.2f} VA")
+    st.write(f"**Comportamento Predominante:** {carater}")
+
+# --- DIAGRAMAS FASORIAIS ---
 st.markdown("---")
 st.subheader("📐 Diagrama Fasorial e Triângulo de Potências")
 g1, g2 = st.columns(2)
 
 with g1:
-    st.markdown("**Diagrama Fasorial (V e I)**")
+    st.markdown("**Diagrama Fasorial (Tensão V e Corrente I)**")
     fig_fasor, ax_f = plt.subplots(figsize=(4, 4))
     escala_I = (V_rms / I_rms) * 0.4 if I_rms > 0 else 1.0
 
@@ -232,7 +316,7 @@ with g1:
     ax_f.quiver(
         0, 0, u_I, v_I,
         angles="xy", scale_units="xy", scale=1,
-        color="cyan", label=f"I = {I_rms:.2f}A ∠{angle_I_deg:.1f}°"
+        color="blue", label=f"I = {I_rms:.2f}A ∠{angle_I_deg:.1f}°"
     )
 
     lim = max(V_rms, abs(I_rms * escala_I)) * 1.2
@@ -249,21 +333,9 @@ with g2:
     st.markdown("**Triângulo de Potências (P, Q, S)**")
     fig_pot, ax_p = plt.subplots(figsize=(4, 4))
 
-    ax_p.quiver(
-        0, 0, P, 0,
-        angles="xy", scale_units="xy", scale=1,
-        color="green", label=f"P = {P:.1f} W"
-    )
-    ax_p.quiver(
-        P, 0, 0, Q,
-        angles="xy", scale_units="xy", scale=1,
-        color="orange", label=f"Q = {Q:.1f} VAR"
-    )
-    ax_p.quiver(
-        0, 0, P, Q,
-        angles="xy", scale_units="xy", scale=1,
-        color="purple", label=f"S = {S:.1f} VA"
-    )
+    ax_p.quiver(0, 0, P, 0, angles="xy", scale_units="xy", scale=1, color="green", label=f"P = {P:.1f} W")
+    ax_p.quiver(P, 0, 0, Q, angles="xy", scale_units="xy", scale=1, color="orange", label=f"Q = {Q:.1f} VAR")
+    ax_p.quiver(0, 0, P, Q, angles="xy", scale_units="xy", scale=1, color="purple", label=f"S = {S:.1f} VA")
 
     max_v = max(abs(P), abs(Q), abs(S)) * 1.2
     ax_p.set_xlim(-10, max_v if max_v > 0 else 10)
@@ -287,14 +359,14 @@ def gerar_pdf(netlist_data, v_f, f_f, z_c, i_val, p_val, q_val, s_val, fp_val, c
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, "Componentes Desenhados no Quadro:", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, "Componentes do Circuito:", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", size=10)
     for item in netlist_data:
-        unid = "Ohm" if item["unid"] == "Ω" else item["unid"]
+        unid = "Ohm" if item.get("Unidade") == "Ω" else item.get("Unidade", "")
         pdf.cell(
             0,
             5,
-            f"  Slot #{item['id']}: {item['tipo']} ({item['no_a']} -> {item['no_b']}) = {item['valor']:.2f} {unid}",
+            f"  Slot #{item['ID']}: {item['Tipo']} (No {item['Nó A']} -> No {item['Nó B']}) = {item['Valor']:.2f} {unid}",
             new_x="LMARGIN",
             new_y="NEXT",
         )
