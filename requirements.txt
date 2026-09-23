@@ -2,3 +2,4 @@ streamlit
 matplotlib
 numpy
 fpdf2
+streamlit-drawable-canvas
