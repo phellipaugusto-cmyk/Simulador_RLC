@@ -1,4 +1,8 @@
 streamlit
+networkx
+numpy
+pandas
+fpdfstreamlit
 matplotlib
 numpy
 fpdf2
