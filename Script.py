@@ -10,20 +10,19 @@ from fpdf import FPDF
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Simulador RLC Interativo estilo Falstad",
+    page_title="Simulador RLC Interativo - Construtor por Nós",
     page_icon="⚡",
     layout="wide",
 )
 
-st.title("⚡ Simulador RLC: Desenho e Reconhecimento Automático de Grafos")
+st.title("⚡ Simulador RLC: Construtor Gráfico por Conexão de Nós")
 st.caption(
-    "Desenhe o circuito posicionando conexões e componentes entre os nós da grade. "
-    "A topologia (Série, Paralelo ou Misto) é identificada automaticamente por Teoria dos Grafos sem qualquer seleção prévia!"
+    "Monte o circuito conectando fios e componentes entre os nós da grade. "
+    "A topologia (Série, Paralelo ou Misto) é identificada automaticamente pelo motor de grafos sem necessidade de seleção manual!"
 )
 
-# --- INICIALIZAÇÃO DA REDE/GRAFO NO ESTADO DA SESSÃO ---
+# --- INICIALIZAÇÃO DA NETLIST NO ESTADO DA SESSÃO ---
 if "netlist" not in st.session_state:
-    # Estrutura inicial estilo Falstad: lista de ramos conectando o Nó A ao Nó B
     st.session_state.netlist = [
         {
             "id": 1,
@@ -67,7 +66,7 @@ if "netlist" not in st.session_state:
         },
     ]
 
-# --- BARRA LATERAL: PARÂMETROS DA SIMULAÇÃO ---
+# --- BARRA LATERAL: PARÂMETROS E INSERÇÃO DE RAMOS ---
 st.sidebar.header("⚙️ Parâmetros de Simulação")
 frequencia = st.sidebar.number_input(
     "Frequência da Fonte (Hz)", value=60.0, min_value=0.1, step=1.0
@@ -75,7 +74,7 @@ frequencia = st.sidebar.number_input(
 omega = 2 * np.pi * frequencia
 
 st.sidebar.markdown("---")
-st.sidebar.header("✏️ Ferramentas de Desenho (Adicionar Ramo)")
+st.sidebar.header("✏️ Adicionar Elemento / Conexão")
 
 with st.sidebar.form("add_branch_form", clear_on_submit=True):
     tipo_elem = st.selectbox(
@@ -103,7 +102,7 @@ with st.sidebar.form("add_branch_form", clear_on_submit=True):
         f"Valor ({u_def})", value=v_def, min_value=0.0, step=1.0
     )
 
-    if st.form_submit_button("➕ Conectar Ramo ao Esquema"):
+    if st.form_submit_button("➕ Conectar no Circuito"):
         if no_origem == no_destino:
             st.error("Os nós de origem e destino devem ser diferentes!")
         else:
@@ -123,23 +122,21 @@ with st.sidebar.form("add_branch_form", clear_on_submit=True):
             )
             st.rerun()
 
-if st.sidebar.button("🗑️ Limpar Tela / Novo Desenho"):
+if st.sidebar.button("🗑️ Limpar Circuito"):
     st.session_state.netlist = []
     st.rerun()
 
-# --- INTERFACE DE EDIÇÃO DA NETLIST E DOS NÓS ---
-st.subheader("🖥️ Canvas e Editor de Conexões de Nós (Estilo Netlist Falstad)")
+# --- EDITOR DE NÓS E CONEXÕES ---
+st.subheader("🖥️ Canvas e Editor de Conexões de Nós")
 st.caption(
-    "Abaixo estão listados os ramos desenhados. Modifique os nós de conexão ou os valores para alterar a geometria do circuito em tempo real."
+    "Abaixo estão listados os ramos e fios conectados. Modifique os nós de conexão ou os valores dos componentes para alterar a geometria do circuito em tempo real."
 )
 
 if not st.session_state.netlist:
-    st.warning(
-        "O Canvas está vazio. Adicione componentes e fios através do menu lateral."
-    )
+    st.warning("O painel está vazio. Adicione componentes ou fios de conexão pelo menu lateral.")
     st.stop()
 
-# Tabela interativa de edição de ramos
+# Grade interativa para ajuste de conexões
 cols_branch = st.columns(min(len(st.session_state.netlist), 4))
 for idx, item in enumerate(st.session_state.netlist):
     col_t = cols_branch[idx % len(cols_branch)]
@@ -171,30 +168,21 @@ for idx, item in enumerate(st.session_state.netlist):
             st.rerun()
 
 
-# --- MOTOR DE RECONHECIMENTO AUTOMÁTICO DA TOPOLOGIA VIA GRAFOS ---
+# --- MOTOR DE RECONHECIMENTO AUTOMÁTICO DE TOPOLOGIA E CÁLCULO ---
 def analisar_topologia_e_impedancia(netlist, w):
-    # Criação do Grafo de Conexões
     G = nx.MultiGraph()
     for item in netlist:
         G.add_edge(item["no_a"], item["no_b"], key=item["id"], data=item)
 
-    # Identificação da Fonte
     fontes = [i for i in netlist if i["tipo"] == "Fonte CA"]
     if not fontes:
-        return (
-            "Indefinida (Sem Fonte)",
-            complex(0, 0),
-            100.0,
-            "Adicione uma Fonte CA.",
-        )
+        return "Sem Fonte", complex(0, 0), 100.0, "Adicione uma Fonte CA."
 
     fonte_principal = fontes[0]
     n_src1, n_src2 = fonte_principal["no_a"], fonte_principal["no_b"]
     V_rms = fonte_principal["valor"]
 
-    # Cálculo do número de caminhos paralelos independentes
     G_sem_fonte = G.copy()
-    # Remove as arestas da fonte
     for u, v, k, d in list(G_sem_fonte.edges(keys=True, data=True)):
         if d["data"]["tipo"] == "Fonte CA":
             G_sem_fonte.remove_edge(u, v, key=k)
@@ -204,7 +192,7 @@ def analisar_topologia_e_impedancia(netlist, w):
             "Circuito Aberto",
             complex(1e9, 0),
             V_rms,
-            "Não há caminho fechado entre os terminais da fonte.",
+            "Não há caminho fechado ligando os terminais da fonte.",
         )
 
     caminhos = list(nx.all_simple_paths(G_sem_fonte, source=n_src1, target=n_src2))
@@ -214,7 +202,6 @@ def analisar_topologia_e_impedancia(netlist, w):
         if node not in [n_src1, n_src2]
     ]
 
-    # Classificação gráfica da topologia
     if len(caminhos) == 1 and all(d <= 2 for d in graus_nos_internos):
         topologia_nome = "Série Puro"
     elif len(caminhos) > 1 and all(len(p) == 2 for p in caminhos):
@@ -222,8 +209,6 @@ def analisar_topologia_e_impedancia(netlist, w):
     else:
         topologia_nome = "Misto (Série-Paralelo)"
 
-    # Análise Nodal para Impedância Equivalente (MNA)
-    # Cálculo das impedâncias individuais dos ramos
     def calc_z_ramo(elem, frequency_w):
         t, v = elem["tipo"], elem["valor"]
         if t == "Resistor":
@@ -233,19 +218,16 @@ def analisar_topologia_e_impedancia(netlist, w):
         elif t == "Capacitor":
             return complex(0, -1 / (frequency_w * (v / 1e6)))
         elif t == "Fio (Wire)":
-            return complex(1e-6, 0)  # Impedância desprezível
+            return complex(1e-6, 0)
         return complex(1e-6, 0)
 
-    # Identificação dos nós
     nos_unicos = sorted(list(G.nodes()))
     node_map = {node: idx for idx, node in enumerate(nos_unicos)}
     N = len(nos_unicos)
 
-    # Nó de referência (GND) = n_src2
     ref_node = node_map[n_src2]
     src_node = node_map[n_src1]
 
-    # Matriz de Admitância Y
     Y = np.zeros((N, N), dtype=complex)
     for item in netlist:
         if item["tipo"] == "Fonte CA":
@@ -258,11 +240,9 @@ def analisar_topologia_e_impedancia(netlist, w):
         Y[u, v] -= y_item
         Y[v, u] -= y_item
 
-    # Submatriz reduzida excluindo nó de referência
     nos_ativos = [i for i in range(N) if i != ref_node]
     Y_red = Y[np.ix_(nos_ativos, nos_ativos)]
 
-    # Injeção de corrente unitária no nó da fonte para determinar Z_eq
     I_vector = np.zeros(len(nos_ativos), dtype=complex)
     idx_src_red = nos_ativos.index(src_node)
     I_vector[idx_src_red] = 1.0
@@ -273,27 +253,28 @@ def analisar_topologia_e_impedancia(netlist, w):
     except np.linalg.LinAlgError:
         Z_eq = complex(1e-6, 0)
 
-    return topologia_nome, Z_eq, V_rms, "Cálculo realizado com sucesso."
+    return topologia_nome, Z_eq, V_rms, "Cálculo concluído com sucesso."
 
 
 topologia_detectada, Z_eq, V_rms, msg_status = analisar_topologia_e_impedancia(
     st.session_state.netlist, omega
 )
 
-# --- RENDERING GRÁFICO DO ESQUEMÁTICO BASEADO NO GRAFO ---
+# --- DESENHO DO ESQUEMÁTICO VIA GRAFO ---
 st.markdown("---")
-st.subheader("🔌 Esquemático do Circuito Reconhecido Visualmente")
-st.caption(f"Topologia Detectada Graficamente: **{topologia_detectada}**")
+st.subheader("🔌 Esquemático do Circuito")
+st.caption(f"Topologia Identificada: **{topologia_detectada}**")
 
 
 def desenhar_grafo_esquematico(netlist):
     G_vis = nx.Graph()
     for item in netlist:
-        G_vis.add_edge(
-            item["no_a"],
-            item["no_b"],
-            label=f"{item['tipo'][0]}:{item['valor']}{item['unid']}",
+        lbl = (
+            f"{item['tipo'][0]}:{item['valor']}{item['unid']}"
+            if item["tipo"] != "Fio (Wire)"
+            else "Fio"
         )
+        G_vis.add_edge(item["no_a"], item["no_b"], label=lbl)
 
     fig_g, ax_g = plt.subplots(figsize=(8, 3))
     pos = nx.spring_layout(G_vis, seed=42)
@@ -302,20 +283,11 @@ def desenhar_grafo_esquematico(netlist):
         G_vis, pos, node_color="gold", node_size=700, ax=ax_g
     )
     nx.draw_networkx_labels(
-        G_vis,
-        pos,
-        font_size=10,
-        font_weight="bold",
-        font_color="black",
-        ax=ax_g,
+        G_vis, pos, font_size=10, font_weight="bold", font_color="black", ax=ax_g
     )
 
-    edge_labels = {
-        (u, v): d["label"] for u, v, d in G_vis.edges(data=True)
-    }
-    nx.draw_networkx_edges(
-        G_vis, pos, width=2, edge_color="navy", ax=ax_g
-    )
+    edge_labels = {(u, v): d["label"] for u, v, d in G_vis.edges(data=True)}
+    nx.draw_networkx_edges(G_vis, pos, width=2, edge_color="navy", ax=ax_g)
     nx.draw_networkx_edge_labels(
         G_vis, pos, edge_labels=edge_labels, font_size=8, ax=ax_g
     )
@@ -326,7 +298,7 @@ def desenhar_grafo_esquematico(netlist):
 
 st.pyplot(desenhar_grafo_esquematico(st.session_state.netlist))
 
-# --- GRANDEZA ELÉTRICAS CALCULADAS ---
+# --- CÁLCULO E EXIBIÇÃO DAS GRANDEZA ELÉTRICAS ---
 abs_Z = abs(Z_eq)
 angle_Z_rad = cmath.phase(Z_eq)
 angle_Z_deg = np.degrees(angle_Z_rad)
@@ -349,7 +321,7 @@ m2.metric("Corrente Total RMS |I|", f"{I_rms:.2f} A")
 m3.metric("Potência Ativa (P)", f"{P:.2f} W")
 m4.metric("Fator de Potência (FP)", f"{FP:.4f}")
 
-# --- DIAGRAMAS FASORIAIS E TRIÂNGULO DE POTÊNCIA ---
+# --- DIAGRAMAS FASORIAIS E TRIÂNGULO DE POTÊNCIAS ---
 st.markdown("---")
 st.subheader("📐 Diagramas Fasoriais e Triângulo de Potências")
 g1, g2 = st.columns(2)
@@ -439,28 +411,39 @@ with g2:
     ax_p.legend(loc="upper left", fontsize=8)
     st.pyplot(fig_pot)
 
-# --- GERADOR DE RELATÓRIO EM PDF ---
+# --- GERADOR DE RELATÓRIO PDF ---
 st.markdown("---")
-st.subheader("📄 Exportar Relatório PDF com Topologia Reconhecida")
+st.subheader("📄 Exportar Relatório PDF")
 
 
-def gerar_pdf_falstad(netlist, topologia, v_f, f_f, z_c, i_val, p_val, q_val, s_val, fp_val):
+def gerar_pdf_circuito(
+    netlist, topologia, v_f, f_f, z_c, i_val, p_val, q_val, s_val, fp_val
+):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 14)
     pdf.cell(
-        0, 10, "Relatorio Tecnico - Circuito RLC (Topologia via Grafo)", ln=True, align="C"
+        0,
+        10,
+        "Relatorio Tecnico - Analise de Circuito RLC",
+        ln=True,
+        align="C",
     )
     pdf.ln(4)
 
     pdf.set_font("Arial", size=10)
-    pdf.cell(0, 6, f"Data de Emissao: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=True)
-    pdf.cell(0, 6, f"Topologia Detectada Graficamente: {topologia}", ln=True)
+    pdf.cell(
+        0,
+        6,
+        f"Data de Emissao: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
+        ln=True,
+    )
+    pdf.cell(0, 6, f"Topologia Detectada: {topologia}", ln=True)
     pdf.cell(0, 6, f"Fonte CA: {v_f:.2f} V @ {f_f:.2f} Hz", ln=True)
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 6, "Netlist do Esquema Desenhado:", ln=True)
+    pdf.cell(0, 6, "Netlist e Ramos Conectados:", ln=True)
     pdf.set_font("Arial", size=10)
     for item in netlist:
         unid = "Ohm" if item["unid"] == "Ω" else item["unid"]
@@ -485,7 +468,7 @@ def gerar_pdf_falstad(netlist, topologia, v_f, f_f, z_c, i_val, p_val, q_val, s_
     return bytes(pdf.output())
 
 
-pdf_bytes = gerar_pdf_falstad(
+pdf_bytes = gerar_pdf_circuito(
     st.session_state.netlist,
     topologia_detectada,
     V_rms,
@@ -501,7 +484,7 @@ pdf_bytes = gerar_pdf_falstad(
 st.download_button(
     label="📥 Baixar Relatório Técnico em PDF (.pdf)",
     data=pdf_bytes,
-    file_name=f"relatorio_falstad_rlc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+    file_name=f"relatorio_circuito_rlc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
     mime="application/pdf",
     use_container_width=True,
 )
