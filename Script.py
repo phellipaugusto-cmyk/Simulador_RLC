@@ -9,15 +9,15 @@ from fpdf import FPDF
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Simulador RLC com Exportação PDF",
+    page_title="Simulador RLC & Editor Livre (Estilo Falstad)",
     page_icon="⚡",
     layout="wide",
 )
 
-st.title("⚡ Simulador e Analisador de Circuitos RLC")
+st.title("⚡ Simulador RLC Avançado com Editor Esquematizado Livre")
 st.markdown(
-    "Configure os parâmetros da fonte e a topologia do circuito para calcular a impedância equivalente, "
-    "corrente, potências, diagramas fasoriais e exportar o relatório técnico em **PDF**, **TXT** ou **Markdown**."
+    "Construa e posicione componentes livremente na bancada interativa abaixo (estilo **Falstad/Multisim**), "
+    "analise formas de onda em tempo real e gere relatórios técnicos em **PDF**, **TXT** e **Markdown**."
 )
 
 # --- INICIALIZAÇÃO DO ESTADO DA SESSÃO ---
@@ -28,8 +28,8 @@ if "componentes" not in st.session_state:
         {"tipo": "Capacitor", "valor": 30.01, "unidade": "µF"},
     ]
 
-# --- BARRA LATERAL: CONFIGURAÇÕES E PARÂMETROS ---
-st.sidebar.header("1. Parâmetros da Fonte CA")
+# --- BARRA LATERAL: FONTE, TOPOLOGIA E PARÂMETROS ---
+st.sidebar.header("1. Fonte de Alimentação CA")
 V_rms = st.sidebar.number_input(
     "Tensão Eficaz V_rms (V)", value=100.0, step=1.0, min_value=0.1
 )
@@ -38,9 +38,9 @@ f = st.sidebar.number_input(
 )
 w = 2 * np.pi * f
 
-st.sidebar.header("2. Topologia do Circuito")
+st.sidebar.header("2. Topologia para Análise Exata")
 arranjo = st.sidebar.selectbox(
-    "Arranjo dos Componentes",
+    "Arranjo dos Componentes Ativos",
     [
         "Série Puro",
         "Paralelo Puro",
@@ -48,7 +48,7 @@ arranjo = st.sidebar.selectbox(
     ],
 )
 
-st.sidebar.header("3. Adicionar Componentes")
+st.sidebar.header("3. Inserir Elemento na Lista")
 with st.sidebar.form("add_comp_form", clear_on_submit=True):
     tipo_comp = st.selectbox(
         "Tipo de Elemento", ["Resistor (R)", "Indutor (L)", "Capacitor (C)"]
@@ -62,7 +62,7 @@ with st.sidebar.form("add_comp_form", clear_on_submit=True):
     else:
         unid = "µF"
 
-    submitted = st.form_submit_button("➕ Adicionar ao Circuito")
+    submitted = st.form_submit_button("➕ Adicionar à Lista Ativa")
     if submitted:
         nome_tipo = tipo_comp.split(" ")[0]
         st.session_state.componentes.append(
@@ -70,49 +70,170 @@ with st.sidebar.form("add_comp_form", clear_on_submit=True):
         )
         st.rerun()
 
-# --- MÓDULO VISUAL: DRAG & DROP ---
-with st.expander(
-    "🖐️ Bancada Interativa de Arraste (Drag & Drop)", expanded=False
-):
-    st.write(
-        "Arraste os componentes pré-definidos para visualizar a alocação nos slots do circuito."
-    )
-    drag_drop_html = """
-    <style>
-        .container { display: flex; gap: 20px; font-family: sans-serif; }
-        .box { background: #1e1e1e; color: white; padding: 15px; border-radius: 8px; flex: 1; }
-        .comp { padding: 8px; margin: 5px 0; border-radius: 4px; font-weight: bold; cursor: grab; }
-        .res { background: #d35400; } .ind { background: #2980b9; } .cap { background: #8e44ad; }
-        .slot { height: 60px; border: 2px dashed #7f8c8d; margin: 8px 0; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
-    </style>
-    <div class="container">
-        <div class="box">
-            <h4>📦 Componentes Disponíveis</h4>
-            <div class="comp res" draggable="true" id="c1">R1 (100 Ω)</div>
-            <div class="comp ind" draggable="true" id="c2">L1 (312 mH)</div>
-            <div class="comp cap" draggable="true" id="c3">C1 (30.01 µF)</div>
-        </div>
-        <div class="box">
-            <h4>🔌 Slots do Circuito</h4>
-            <div class="slot" ondragover="event.preventDefault()" ondrop="this.appendChild(document.getElementById(event.dataTransfer.getData('text')))">Slot 1 (Entrada)</div>
-            <div class="slot" ondragover="event.preventDefault()" ondrop="this.appendChild(document.getElementById(event.dataTransfer.getData('text')))">Slot 2 (Paralelo A)</div>
-            <div class="slot" ondragover="event.preventDefault()" ondrop="this.appendChild(document.getElementById(event.dataTransfer.getData('text')))">Slot 3 (Paralelo B)</div>
-        </div>
-    </div>
-    <script>
-        document.querySelectorAll('.comp').forEach(c => {
-            c.addEventListener('dragstart', e => e.dataTransfer.setData('text', e.target.id));
-        });
-    </script>
-    """
-    components.html(drag_drop_html, height=260)
+# --- MÓDULO 1: BANCADA DE DESENHO E ALOCAÇÃO LIVRE (ESTILO FALSTAD) ---
+st.subheader("🛠️ Editor de Circuitos Esquematizado Livre (Canvas 2D)")
+st.caption(
+    "Selecione uma ferramenta abaixo e clique/arraste no grid para desenhar fios, conectar componentes e definir a trajetória do circuito."
+)
 
-# --- GERENCIADOR DE COMPONENTES ATIVOS ---
-st.subheader("📋 Componentes no Circuito Ativo")
+falstad_canvas_html = """
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+    body { font-family: sans-serif; background: #121212; color: #ffffff; margin: 0; padding: 10px; }
+    #toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; background: #1e1e1e; padding: 10px; border-radius: 8px; }
+    button { background: #2c3e50; color: white; border: 1px solid #455a64; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    button.active { background: #27ae60; border-color: #2ecc71; }
+    button:hover { background: #34495e; }
+    #canvas-container { position: relative; width: 100%; overflow: hidden; border: 2px solid #333; border-radius: 8px; background-color: #0d1117; }
+    canvas { display: block; cursor: crosshair; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+    <button id="btn-wire" class="active" onclick="setTool('wire')">✏️ Fio (Wire)</button>
+    <button id="btn-res" onclick="setTool('res')">🟧 Resistor (R)</button>
+    <button id="btn-ind" onclick="setTool('ind')">🟦 Indutor (L)</button>
+    <button id="btn-cap" onclick="setTool('cap')">🟪 Capacitor (C)</button>
+    <button id="btn-source" onclick="setTool('source')">🔴 Fonte CA</button>
+    <button id="btn-gnd" onclick="setTool('gnd')">⏚ Terra (GND)</button>
+    <button id="btn-clear" onclick="clearCanvas()" style="background:#c0392b;">🗑️ Limpar Tela</button>
+</div>
+
+<div id="canvas-container">
+    <canvas id="circuitCanvas" width="900" height="320"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('circuitCanvas');
+    const ctx = canvas.getContext('2d');
+    const gridSize = 20;
+    
+    let currentTool = 'wire';
+    let elements = [];
+    let isDrawing = false;
+    let startX = 0, startY = 0;
+    let currentX = 0, currentY = 0;
+
+    function snap(val) {
+        return Math.round(val / gridSize) * gridSize;
+    }
+
+    function setTool(tool) {
+        currentTool = tool;
+        document.querySelectorAll('#toolbar button').forEach(b => b.classList.remove('active'));
+        const btn = document.getElementById('btn-' + tool);
+        if(btn) btn.classList.add('active');
+    }
+
+    function clearCanvas() {
+        elements = [];
+        drawGrid();
+    }
+
+    function drawGrid() {
+        ctx.fillStyle = '#0d1117';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = '#30363d';
+        for(let x = 0; x < canvas.width; x += gridSize) {
+            for(let y = 0; y < canvas.height; y += gridSize) {
+                ctx.fillRect(x - 1, y - 1, 2, 2);
+            }
+        }
+
+        // Desenha todos os elementos gravados
+        elements.forEach(el => drawElement(el));
+
+        // Desenha a prévia do elemento durante o arrasto
+        if(isDrawing) {
+            ctx.strokeStyle = '#f1c40f';
+            ctx.lineWidth = 2;
+            drawElement({ tool: currentTool, x1: startX, y1: startY, x2: currentX, y2: currentY, preview: true });
+        }
+    }
+
+    function drawElement(el) {
+        ctx.beginPath();
+        ctx.strokeStyle = el.preview ? '#f39c12' : '#2ecc71';
+        ctx.lineWidth = 2.5;
+
+        if (el.tool === 'wire') {
+            ctx.moveTo(el.x1, el.y1);
+            ctx.lineTo(el.x2, el.y2);
+            ctx.stroke();
+        } else if (['res', 'ind', 'cap', 'source'].includes(el.tool)) {
+            // Desenha fio guia até o componente
+            let midX = (el.x1 + el.x2) / 2;
+            let midY = (el.y1 + el.y2) / 2;
+            ctx.moveTo(el.x1, el.y1);
+            ctx.lineTo(el.x2, el.y2);
+            ctx.stroke();
+
+            // Símbolo do componente no centro
+            ctx.fillStyle = el.tool === 'res' ? '#e67e22' : el.tool === 'ind' ? '#3498db' : el.tool === 'cap' ? '#9b59b6' : '#e74c3c';
+            ctx.beginPath();
+            ctx.arc(midX, midY, 12, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            let label = el.tool === 'res' ? 'R' : el.tool === 'ind' ? 'L' : el.tool === 'cap' ? 'C' : 'AC';
+            ctx.fillText(label, midX, midY);
+        } else if (el.tool === 'gnd') {
+            ctx.moveTo(el.x1, el.y1);
+            ctx.lineTo(el.x1, el.y1 + 15);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(el.x1 - 10, el.y1 + 15);
+            ctx.lineTo(el.x1 + 10, el.y1 + 15);
+            ctx.stroke();
+        }
+    }
+
+    canvas.addEventListener('mousedown', e => {
+        const rect = canvas.getBoundingClientRect();
+        startX = snap(e.clientX - rect.left);
+        startY = snap(e.clientY - rect.top);
+        isDrawing = true;
+    });
+
+    canvas.addEventListener('mousemove', e => {
+        if (!isDrawing) return;
+        const rect = canvas.getBoundingClientRect();
+        currentX = snap(e.clientX - rect.left);
+        currentY = snap(e.clientY - rect.top);
+        drawGrid();
+    });
+
+    canvas.addEventListener('mouseup', e => {
+        if (!isDrawing) return;
+        isDrawing = false;
+        const rect = canvas.getBoundingClientRect();
+        currentX = snap(e.clientX - rect.left);
+        currentY = snap(e.clientY - rect.top);
+
+        if (startX !== currentX || startY !== currentY || currentTool === 'gnd') {
+            elements.push({ tool: currentTool, x1: startX, y1: startY, x2: currentX, y2: currentY });
+        }
+        drawGrid();
+    });
+
+    drawGrid();
+</script>
+
+</body>
+</html>
+"""
+components.html(falstad_canvas_html, height=390)
+
+# --- GERENCIADOR DE COMPONENTES DA LISTA ---
+st.subheader("📋 Componentes no Circuito Ativo (Calculadora)")
 if not st.session_state.componentes:
-    st.warning(
-        "Nenhum componente adicionado. Utilize o menu lateral para adicionar elementos."
-    )
+    st.warning("Nenhum componente cadastrado para análise numérica.")
     st.stop()
 
 cols = st.columns(min(len(st.session_state.componentes), 6))
@@ -127,7 +248,7 @@ for idx, comp in enumerate(st.session_state.componentes):
             st.rerun()
 
 
-# --- FUNÇÕES DE CÁLCULO ELETRÔNICO ---
+# --- MOTOR DE CÁLCULO ELETRÔNICO ---
 def calcular_impedancia_item(comp, frequency_w):
     val = comp["valor"]
     if comp["tipo"] == "Resistor":
@@ -171,7 +292,7 @@ except ZeroDivisionError:
     st.error("Erro de divisão por zero na combinação do circuito.")
     st.stop()
 
-# --- CÁLCULO DE GRANDEZA E POTÊNCIAS ---
+# --- RESULTADOS DAS GRANDEZAS ELÉTRICAS ---
 abs_Z = abs(Z_eq)
 angle_Z_rad = cmath.phase(Z_eq)
 angle_Z_deg = np.degrees(angle_Z_rad)
@@ -184,147 +305,8 @@ P = S * np.cos(angle_Z_rad)
 Q = S * np.sin(angle_Z_rad)
 FP = np.cos(angle_Z_rad)
 
-
-# --- DESENHO DO ESQUEMÁTICO DO CIRCUITO ---
-def desenhar_esquematico(componentes, modo_arranjo, tensao):
-    fig_esq, ax_esq = plt.subplots(figsize=(8, 2.8))
-    ax_esq.set_aspect("equal")
-    ax_esq.axis("off")
-
-    ax_esq.add_patch(
-        patches.Circle((-1, 2), 0.4, fill=False, color="red", lw=2)
-    )
-    ax_esq.text(
-        -1,
-        2,
-        "~",
-        fontsize=18,
-        ha="center",
-        va="center",
-        color="red",
-        weight="bold",
-    )
-    ax_esq.text(-1, 2.6, f"V = {tensao:.0f}V", fontsize=9, ha="center")
-
-    ax_esq.plot([-1, -1, 0], [1.6, 0, 0], color="black", lw=2)
-    ax_esq.plot([-1, -1, 0], [2.4, 4, 4], color="black", lw=2)
-
-    n_comp = len(componentes)
-    if modo_arranjo == "Série Puro":
-        x_step = 6.0 / max(n_comp, 1)
-        x_curr = 0.0
-        for comp in componentes:
-            x_next = x_curr + x_step
-            ax_esq.plot([x_curr, x_next], [4, 4], color="black", lw=2)
-            rect = patches.Rectangle(
-                (x_curr + x_step * 0.15, 3.6),
-                x_step * 0.7,
-                0.8,
-                facecolor="whitesmoke",
-                edgecolor="navy",
-                lw=2,
-            )
-            ax_esq.add_patch(rect)
-            ax_esq.text(
-                x_curr + x_step * 0.5,
-                4,
-                f"{comp['tipo'][0]}:{comp['valor']}{comp['unidade']}",
-                fontsize=8,
-                ha="center",
-                va="center",
-                weight="bold",
-            )
-            x_curr = x_next
-        ax_esq.plot([x_curr, x_curr], [4, 0], color="black", lw=2)
-        ax_esq.plot([0, x_curr], [0, 0], color="black", lw=2)
-    elif modo_arranjo == "Paralelo Puro":
-        x_step = 6.0 / max(n_comp, 1)
-        ax_esq.plot([0, 6], [4, 4], color="black", lw=2)
-        ax_esq.plot([0, 6], [0, 0], color="black", lw=2)
-        for i, comp in enumerate(componentes):
-            x_pos = (i + 0.5) * x_step
-            ax_esq.plot([x_pos, x_pos], [4, 2.5], color="black", lw=2)
-            ax_esq.plot([x_pos, x_pos], [1.5, 0], color="black", lw=2)
-            rect = patches.Rectangle(
-                (x_pos - 0.4, 1.5),
-                0.8,
-                1.0,
-                facecolor="whitesmoke",
-                edgecolor="darkgreen",
-                lw=2,
-            )
-            ax_esq.add_patch(rect)
-            ax_esq.text(
-                x_pos,
-                2.0,
-                f"{comp['tipo'][0]}\n{comp['valor']}{comp['unidade']}",
-                fontsize=8,
-                ha="center",
-                va="center",
-                weight="bold",
-            )
-    elif modo_arranjo == "Misto (Resistor em Série + Bloco Paralelo)":
-        res_list = [c for c in componentes if c["tipo"] == "Resistor"]
-        reat_list = [c for c in componentes if c["tipo"] != "Resistor"]
-        ax_esq.plot([0, 2], [4, 4], color="black", lw=2)
-        rect_r = patches.Rectangle(
-            (0.5, 3.6),
-            1.0,
-            0.8,
-            facecolor="whitesmoke",
-            edgecolor="darkorange",
-            lw=2,
-        )
-        ax_esq.add_patch(rect_r)
-        lbl_r = f"R:{res_list[0]['valor']}Ω" if res_list else "R_série"
-        ax_esq.text(
-            1.0,
-            4.0,
-            lbl_r,
-            fontsize=8,
-            ha="center",
-            va="center",
-            weight="bold",
-        )
-        ax_esq.plot([2, 6], [4, 4], color="black", lw=2)
-        ax_esq.plot([0, 6], [0, 0], color="black", lw=2)
-        n_r = len(reat_list) if reat_list else 1
-        x_step = 4.0 / n_r
-        for i, comp in enumerate(reat_list):
-            x_pos = 2 + (i + 0.5) * x_step
-            ax_esq.plot([x_pos, x_pos], [4, 2.5], color="black", lw=2)
-            ax_esq.plot([x_pos, x_pos], [1.5, 0], color="black", lw=2)
-            rect = patches.Rectangle(
-                (x_pos - 0.4, 1.5),
-                0.8,
-                1.0,
-                facecolor="whitesmoke",
-                edgecolor="purple",
-                lw=2,
-            )
-            ax_esq.add_patch(rect)
-            ax_esq.text(
-                x_pos,
-                2.0,
-                f"{comp['tipo'][0]}\n{comp['valor']}{comp['unidade']}",
-                fontsize=8,
-                ha="center",
-                va="center",
-                weight="bold",
-            )
-        ax_esq.plot([6, 6], [4, 0], color="black", lw=2)
-
-    ax_esq.set_xlim(-2, 7)
-    ax_esq.set_ylim(-0.5, 4.8)
-    return fig_esq
-
-
 st.markdown("---")
-st.subheader("🔌 Esquemático do Circuito Montado")
-st.pyplot(desenhar_esquematico(st.session_state.componentes, arranjo, V_rms))
-
-# --- EXIBIÇÃO DOS RESULTADOS ---
-st.subheader("📊 Resultados do Circuito")
+st.subheader("📊 Resultados Numéricos do Circuito")
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Impedância |Z_eq|", f"{abs_Z:.2f} Ω")
 m2.metric("Corrente Total |I|", f"{I_rms:.2f} A")
@@ -342,14 +324,55 @@ with r2:
     st.write(f"**Potência Aparente (S):** {S:.2f} VA")
     st.write(f"**Comportamento Predominante:** {carater}")
 
-# --- GRÁFICOS: DIAGRAMA FASORIAL E TRIÂNGULO DE POTÊNCIAS ---
+# --- MÓDULO 2: OSCILOSCÓPIO VIRTUAL NO DOMÍNIO DO TEMPO (v(t) e i(t)) ---
+st.markdown("---")
+st.subheader("📺 Osciloscópio Virtual: Formas de Onda no Tempo v(t) e i(t)")
+
+t = np.linspace(0, 2 / f, 500)
+V_pico = V_rms * np.sqrt(2)
+I_pico = I_rms * np.sqrt(2)
+
+v_t = V_pico * np.sin(w * t)
+i_t = I_pico * np.sin(w * t + np.radians(angle_I_deg))
+
+fig_osc, ax_osc = plt.subplots(figsize=(9, 3.2))
+ax_osc.plot(
+    t * 1000,
+    v_t,
+    color="red",
+    linewidth=2,
+    label=f"v(t) - Pico: {V_pico:.1f} V",
+)
+ax_osc_i = ax_osc.twinx()
+ax_osc_i.plot(
+    t * 1000,
+    i_t,
+    color="cyan",
+    linewidth=2,
+    linestyle="--",
+    label=f"i(t) - Pico: {I_pico:.2f} A",
+)
+
+ax_osc.set_xlabel("Tempo (ms)")
+ax_osc.set_ylabel("Tensão (V)", color="red")
+ax_osc_i.set_ylabel("Corrente (A)", color="cyan")
+ax_osc.grid(True, linestyle=":", alpha=0.6)
+
+# União de legendas dos dois eixos
+lines_1, labels_1 = ax_osc.get_legend_handles_labels()
+lines_2, labels_2 = ax_osc_i.get_legend_handles_labels()
+ax_osc.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper right")
+
+st.pyplot(fig_osc)
+
+# --- MÓDULO 3: DIAGRAMA FASORIAL E TRIÂNGULO DE POTÊNCIAS ---
 st.markdown("---")
 g1, g2 = st.columns(2)
 
 with g1:
     st.subheader("Diagrama Fasorial (V e I)")
-    fig_f, ax_f = plt.subplots(figsize=(5, 5))
-    escala_I = 50.0
+    fig_f, ax_f = plt.subplots(figsize=(4.5, 4.5))
+    escala_I = (V_rms / I_rms) * 0.5 if I_rms > 0 else 1.0
 
     ax_f.quiver(
         0,
@@ -372,8 +395,8 @@ with g1:
         angles="xy",
         scale_units="xy",
         scale=1,
-        color="blue",
-        label=f"I = {I_rms:.2f}A ∠{angle_I_deg:.1f}° (x{escala_I:.0f})",
+        color="cyan",
+        label=f"I = {I_rms:.2f}A ∠{angle_I_deg:.1f}°",
     )
 
     lim = max(V_rms, abs(I_rms * escala_I)) * 1.2
@@ -388,7 +411,7 @@ with g1:
 
 with g2:
     st.subheader("Triângulo de Potências (P, Q, S)")
-    fig_p, ax_p = plt.subplots(figsize=(5, 5))
+    fig_p, ax_p = plt.subplots(figsize=(4.5, 4.5))
 
     ax_p.quiver(
         0,
@@ -431,9 +454,67 @@ with g2:
     ax_p.legend(loc="upper left", fontsize=8)
     st.pyplot(fig_p)
 
-# --- MÓDULO DE GERAÇÃO E DOWNLOAD DO RELATÓRIO TÉCNICO ---
+# --- MÓDULO 4: VARREDURA DE FREQUÊNCIA (RESPOSTA EM FREQUÊNCIA - BODE) ---
 st.markdown("---")
-st.subheader("📄 Relatório Técnico da Simulação")
+st.subheader("📈 Varredura de Frequência (|Z| e Fase vs. Frequência)")
+
+freq_array = np.logspace(1, 5, 200)  # 10 Hz até 100 kHz
+z_sweep = []
+phase_sweep = []
+
+for f_i in freq_array:
+    w_i = 2 * np.pi * f_i
+    try:
+        if arranjo == "Série Puro":
+            Z_i = sum(
+                calcular_impedancia_item(c, w_i)
+                for c in st.session_state.componentes
+            )
+        elif arranjo == "Paralelo Puro":
+            Y_i = sum(
+                1 / calcular_impedancia_item(c, w_i)
+                for c in st.session_state.componentes
+            )
+            Z_i = 1 / Y_i
+        else:
+            res_l = [
+                c
+                for c in st.session_state.componentes
+                if c["tipo"] == "Resistor"
+            ]
+            reat_l = [
+                c
+                for c in st.session_state.componentes
+                if c["tipo"] != "Resistor"
+            ]
+            Z_s = sum(calcular_impedancia_item(r, w_i) for r in res_l)
+            Y_p = sum(1 / calcular_impedancia_item(c, w_i) for c in reat_l)
+            Z_i = Z_s + (1 / Y_p)
+        z_sweep.append(abs(Z_i))
+        phase_sweep.append(np.degrees(cmath.phase(Z_i)))
+    except ZeroDivisionError:
+        z_sweep.append(0)
+        phase_sweep.append(0)
+
+fig_bode, (ax_mag, ax_pha) = plt.subplots(1, 2, figsize=(10, 3.2))
+
+ax_mag.semilogx(freq_array, z_sweep, color="blue", linewidth=2)
+ax_mag.set_title("Módulo da Impedância |Z(f)|")
+ax_mag.set_xlabel("Frequência (Hz)")
+ax_mag.set_ylabel("|Z| (Ω)")
+ax_mag.grid(True, which="both", linestyle=":", alpha=0.6)
+
+ax_pha.semilogx(freq_array, phase_sweep, color="purple", linewidth=2)
+ax_pha.set_title("Ângulo de Fase θ(f)")
+ax_pha.set_xlabel("Frequência (Hz)")
+ax_pha.set_ylabel("Fase (°)")
+ax_pha.grid(True, which="both", linestyle=":", alpha=0.6)
+
+st.pyplot(fig_bode)
+
+# --- MÓDULO 5: GERAÇÃO E EXPORTAÇÃO DE RELATÓRIOS ---
+st.markdown("---")
+st.subheader("📄 Exportação do Relatório Técnico")
 
 
 def gerar_relatorio_texto(
@@ -473,7 +554,6 @@ Data de Geracao: {agora}
 - Lista de Componentes do Circuito:
 """
     for i, c in enumerate(componentes, 1):
-        # Substitui o caractere especial Ω por Ohm no texto do relatório para evitar o caractere ? no PDF
         unidade_limpa = "Ohm" if c["unidade"] == "Ω" else c["unidade"]
         texto += f"   [{i}] {c['tipo']}: {c['valor']} {unidade_limpa}\n"
 
@@ -532,7 +612,7 @@ relatorio_gerado = gerar_relatorio_texto(
     carater,
 )
 
-st.text_area("Pré-visualização do Relatório", relatorio_gerado, height=220)
+st.text_area("Pré-visualização do Relatório", relatorio_gerado, height=200)
 
 col_dl1, col_dl2, col_dl3 = st.columns(3)
 
