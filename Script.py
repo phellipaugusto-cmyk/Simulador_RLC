@@ -13,45 +13,54 @@ from fpdf import FPDF
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="Simulador RLC - Desenho no Quadro e Símbolos Normais",
+    page_title="Simulador RLC - Desenho Ortogonal & Análise",
     page_icon="⚡",
     layout="wide",
 )
 
-st.title("⚡ Simulador RLC: Desenho no Quadro e Análise Automática")
+st.title("⚡ Simulador RLC: Desenho Ortogonal no Quadro e Análise Automática")
 st.caption(
-    "Selecione a ferramenta no menu lateral, clique e arraste no quadro ligando os pontos cinzas (nós) de cada componente. "
-    "O aplicativo identifica os traços, desenha o esquema com símbolos elétricos normais e calcula os resultados em tempo real."
+    "Desenhe as ligações na grade abaixo. As conexões são ajustadas automaticamente em ângulos retos (ortogonais de 90°). "
+    "Os símbolos elétricos padrão aparecem no centro dos caminhos e a estrutura desenhada é usada diretamente nos cálculos."
 )
 
-# --- CONFIGURAÇÕES DA GRADE E CANVAS ---
-GRID_SIZE = 50  # Distância em pixels entre os nós da grade
+# --- DIMENSÕES DA GRADE E CANVAS ---
+GRID_SIZE = 40  # Distância entre nós da grade (pixels)
 CANVAS_WIDTH = 800
 CANVAS_HEIGHT = 400
 
 
 def gerar_imagem_grade(width, height, grid_step):
-    """Gera o fundo do quadro com pontos cinzas destacados em cada nó da grade."""
+    """Cria a imagem de fundo permanente com os nós da grade visíveis."""
     img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
+
+    # Linhas de grade suaves de fundo
+    for x in range(0, width, grid_step):
+        draw.line([(x, 0), (x, height)], fill=(235, 235, 235, 255), width=1)
+    for y in range(0, height, grid_step):
+        draw.line([(0, y), (width, y)], fill=(235, 235, 235, 255), width=1)
+
+    # Pontos de atração nos nós da grade
     for x in range(grid_step, width, grid_step):
         for y in range(grid_step, height, grid_step):
-            draw.ellipse([x - 4, y - 4, x + 4, y + 4], fill=(100, 100, 100, 255))
+            draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(100, 100, 100, 255))
+
     return img
 
 
-bg_grid = gerar_imagem_grade(CANVAS_WIDTH, CANVAS_HEIGHT, GRID_SIZE)
+bg_grid_image = gerar_imagem_grade(CANVAS_WIDTH, CANVAS_HEIGHT, GRID_SIZE)
 
-# --- PALETA DE FERRAMENTAS DE DESENHO ---
+# --- FERRAMENTAS DE COMPONENTES ---
 FERRAMENTAS = {
     "🔴 Fonte CA (V)": {"cor": "#dc3545", "tipo": "Fonte CA", "val_def": 127.0, "unid": "V"},
     "⚡ Resistor (R)": {"cor": "#007bff", "tipo": "Resistor", "val_def": 100.0, "unid": "Ω"},
     "🌀 Indutor (L)": {"cor": "#6f42c1", "tipo": "Indutor", "val_def": 312.0, "unid": "mH"},
     "🔋 Capacitor (C)": {"cor": "#fd7e14", "tipo": "Capacitor", "val_def": 30.01, "unid": "µF"},
-    "✏️ Fio (Conexão)": {"cor": "#28a745", "tipo": "Fio (Wire)", "val_def": 0.0, "unid": ""},
+    "✏️ Fio (Wire)": {"cor": "#28a745", "tipo": "Fio (Wire)", "val_def": 0.0, "unid": ""},
 }
 
-# --- BARRA LATERAL: FERRAMENTAS E FREQUÊNCIA ---
+# --- BARRA LATERAL ---
 st.sidebar.header("🎨 Ferramentas de Desenho")
 ferramenta_sel = st.sidebar.radio("Selecione o Componente:", list(FERRAMENTAS.keys()))
 tool_info = FERRAMENTAS[ferramenta_sel]
@@ -62,24 +71,24 @@ freq = st.sidebar.number_input("Frequência f (Hz)", value=60.0, min_value=0.1, 
 omega = 2 * np.pi * freq
 
 # --- QUADRO INTERATIVO DE DESENHO ---
-st.subheader("🖥️ Quadro de Desenho (Ligue os Pontos da Grade)")
+st.subheader("🖥️ Quadro de Desenho (Ligue Ponto a Ponto)")
 st.caption(
-    f"Ferramenta ativa: **{ferramenta_sel}** | "
-    "Clique em um ponto cinza e arraste até outro ponto para criar a conexão do componente."
+    f"Ferramenta Ativa: **{ferramenta_sel}** | "
+    "Arraste o mouse entre os pontos cinzas. As linhas diagonais são convertidas automaticamente em segmentos ortogonais."
 )
 
 canvas_result = st_canvas(
     fill_color="rgba(0,0,0,0)",
     stroke_width=4,
     stroke_color=tool_info["cor"],
-    background_image=bg_grid,
+    background_image=bg_grid_image,
     height=CANVAS_HEIGHT,
     width=CANVAS_WIDTH,
     drawing_mode="line",
-    key="canvas_rlc_interactive",
+    key="quadro_rlc_ortogonal",
 )
 
-# --- MAPEAMENTO DOS DESENHOS PARA NÓS E COMPONENTES ---
+# --- RECONHECIMENTO E FORÇAMENTO DE CONEXÕES ORTOGONAIS ---
 netlist = []
 
 if canvas_result.json_data is not None:
@@ -93,9 +102,17 @@ if canvas_result.json_data is not None:
             x2_snap = round(obj["x2"] / GRID_SIZE) * GRID_SIZE
             y2_snap = round(obj["y2"] / GRID_SIZE) * GRID_SIZE
 
-            # Ignora pontos isolados ou sem comprimento
+            # Força o traçado ortogonal (linhas perfeitamente horizontais ou verticais a 90°)
+            dx = abs(x2_snap - x1_snap)
+            dy = abs(y2_snap - y1_snap)
+
+            if dx >= dy:
+                y2_snap = y1_snap  # Segmento Horizontal
+            else:
+                x2_snap = x1_snap  # Segmento Vertical
+
             if x1_snap == x2_snap and y1_snap == y2_snap:
-                continue
+                continue  # Ignora traços nulos
 
             no_a = f"N({int(x1_snap // GRID_SIZE)},{int(y1_snap // GRID_SIZE)})"
             no_b = f"N({int(x2_snap // GRID_SIZE)},{int(y2_snap // GRID_SIZE)})"
@@ -124,32 +141,33 @@ if canvas_result.json_data is not None:
             })
 
 st.markdown("---")
-st.subheader("⚙️ Configurações e Componentes Detectados no Quadro")
+st.subheader("⚙️ Configuração dos Ramos Detectados do Quadro")
 
 if not netlist:
-    st.info("💡 Desenhe as conexões no quadro acima unindo os pontos cinzas com a Fonte CA, componentes e Fios.")
+    st.info("💡 Clique e arraste no quadro acima para desenhar a Fonte CA e os componentes nas linhas da grade.")
     st.stop()
 
-# --- FORMULÁRIO DE VALORES DOS COMPONENTES ---
-st.markdown("**Valores dos Componentes Desenhados:**")
+# --- TABELA DE AJUSTE DOS VALORES ---
+st.markdown("**Ajuste Fino dos Valores Numéricos:**")
 cols = st.columns(min(len(netlist), 4))
 
 for idx, item in enumerate(netlist):
     col_t = cols[idx % len(cols)]
     with col_t:
         st.markdown(f"**Slot #{item['id']}: {item['tipo']}**")
-        st.caption(f"De `{item['no_a']}` a `{item['no_b']}`")
+        st.caption(f"Ligação Ortogonal: `{item['no_a']}` ➔ `{item['no_b']}`")
         if item["tipo"] != "Fio (Wire)":
             item["valor"] = st.number_input(
                 f"Valor ({item['unid']})",
                 value=float(item["valor"]),
                 min_value=0.01 if item["tipo"] != "Fonte CA" else 0.1,
-                key=f"val_canvas_slot_{idx}",
+                key=f"val_ortho_slot_{idx}",
             )
 
-# --- RENDERIZAÇÃO DO ESQUEMA ELÉTRICO COM SÍMBOLOS NORMAIS ---
-def desenhar_simbolo_norma(ax, p1, p2, tipo, rotulo):
-    """Desenha os símbolos gráficos elétricos padronizados (R, L, C, Fonte CA)."""
+
+# --- RENDERIZADOR DO ESQUEMA COM SÍMBOLOS NO CENTRO DO CAMINHO ---
+def desenhar_simbolo_no_meio(ax, p1, p2, tipo, rotulo):
+    """Desenha a fiação ortogonal e posiciona o símbolo esquemático exatamente no centro do caminho."""
     x1, y1 = p1
     x2, y2 = p2
     dx, dy = x2 - x1, y2 - y1
@@ -163,9 +181,11 @@ def desenhar_simbolo_norma(ax, p1, p2, tipo, rotulo):
     def to_glob(lx, ly):
         return (x1 + lx * cos_a - ly * sin_a, y1 + lx * sin_a + ly * cos_a)
 
-    ax.plot([x1, x2], [y1, y2], color="black", lw=1.5, zorder=1)
+    # Linha ortogonal do fio
+    ax.plot([x1, x2], [y1, y2], color="black", lw=2, zorder=1)
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
 
+    # Símbolos esquemáticos centralizados
     if tipo == "Resistor":
         w_res, h_res = min(0.35 * dist, 0.4), 0.12
         cx_l = (dist - w_res) / 2
@@ -178,14 +198,14 @@ def desenhar_simbolo_norma(ax, p1, p2, tipo, rotulo):
             (cx_l + w_res, 0), (dist, 0)
         ]
         gx, gy = zip(*[to_glob(lx, ly) for lx, ly in pts])
-        ax.plot(gx, gy, color="black", lw=2, zorder=3)
+        ax.plot(gx, gy, color="black", lw=2.5, zorder=3)
 
     elif tipo == "Capacitor":
         gap, h_cap, c_mid = 0.08, 0.2, dist / 2
         p1_a, p1_b = to_glob(c_mid - gap, h_cap), to_glob(c_mid - gap, -h_cap)
         p2_a, p2_b = to_glob(c_mid + gap, h_cap), to_glob(c_mid + gap, -h_cap)
-        ax.plot([p1_a[0], p1_b[0]], [p1_a[1], p1_b[1]], color="black", lw=2.5, zorder=3)
-        ax.plot([p2_a[0], p2_b[0]], [p2_a[1], p2_b[1]], color="black", lw=2.5, zorder=3)
+        ax.plot([p1_a[0], p1_b[0]], [p1_a[1], p1_b[1]], color="black", lw=3, zorder=3)
+        ax.plot([p2_a[0], p2_b[0]], [p2_a[1], p2_b[1]], color="black", lw=3, zorder=3)
 
     elif tipo == "Indutor":
         w_ind = min(0.4 * dist, 0.5)
@@ -196,7 +216,7 @@ def desenhar_simbolo_norma(ax, p1, p2, tipo, rotulo):
             x_off = c_start + i * (2 * r_loop) + r_loop
             lx, ly = x_off - r_loop * np.cos(t), r_loop * np.sin(t)
             gx, gy = zip(*[to_glob(x, y) for x, y in zip(lx, ly)])
-            ax.plot(gx, gy, color="black", lw=2, zorder=3)
+            ax.plot(gx, gy, color="black", lw=2.5, zorder=3)
 
     elif tipo == "Fonte CA":
         r_src = 0.18
@@ -206,25 +226,25 @@ def desenhar_simbolo_norma(ax, p1, p2, tipo, rotulo):
         lx_s = (t_s / np.pi) * (r_src * 0.6) + (dist / 2)
         ly_s = np.sin(t_s) * (r_src * 0.4)
         gx_s, gy_s = zip(*[to_glob(x, y) for x, y in zip(lx_s, ly_s)])
-        ax.plot(gx_s, gy_s, color="black", lw=1.8, zorder=4)
+        ax.plot(gx_s, gy_s, color="black", lw=2, zorder=4)
 
     if tipo != "Fio (Wire)":
         lbl_x, lbl_y = to_glob(dist / 2, 0.25)
         ax.text(
             lbl_x, lbl_y, rotulo,
             fontsize=9, fontweight="bold", ha="center", va="center",
-            bbox=dict(boxstyle="round,pad=0.2", facecolor="#ffffff", edgecolor="gray", alpha=0.9),
+            bbox=dict(boxstyle="round,pad=0.2", facecolor="#ffffff", edgecolor="black", alpha=0.9),
             zorder=5,
         )
 
 
-def renderizar_esquematico(netlist_data):
+def renderizar_esquema_ortogonal(netlist_data):
     G = nx.MultiGraph()
     for item in netlist_data:
         G.add_edge(item["no_a"], item["no_b"], key=item["id"], data=item)
 
     fig, ax = plt.subplots(figsize=(8, 4))
-    pos = nx.spring_layout(G, seed=42, k=1.2)
+    pos = nx.spring_layout(G, seed=24, k=1.2)
 
     for node, (nx_x, ny_y) in pos.items():
         ax.scatter(nx_x, ny_y, s=350, color="#007bff", zorder=6, edgecolors="black")
@@ -234,18 +254,19 @@ def renderizar_esquematico(netlist_data):
         elem = d["data"]
         unid = elem.get("unid", "")
         rotulo = f"{elem['tipo']}\n{elem['valor']}{unid}" if elem["tipo"] != "Fio (Wire)" else "Fio"
-        desenhar_simbolo_norma(ax, pos[u], pos[v], elem["tipo"], rotulo)
+        desenhar_simbolo_no_meio(ax, pos[u], pos[v], elem["tipo"], rotulo)
 
     ax.axis("off")
-    plt.title("Esquema Elétrico com Símbolos Normais (Calculado do Quadro)", fontsize=11, fontweight="bold")
+    plt.title("Circuito Gerado com Símbolos Centralizados nos Caminhos Ortogonais", fontsize=11, fontweight="bold")
     return fig
 
 
 st.markdown("---")
-st.subheader("🖥️ Esquema Elétrico Renderizado com Símbolos Padrão")
-st.pyplot(renderizar_esquematico(netlist))
+st.subheader("🖥️ Esquema Elétrico Renderizado do Quadro")
+st.pyplot(renderizar_esquema_ortogonal(netlist))
 
-# --- CÁLCULO ELÉTRICO E ANÁLISE NODAL (MNA) ---
+
+# --- MOTOR DE CÁLCULO NODAL (MNA / ANÁLISE DE GRAFOS) ---
 def analisar_circuito(netlist_data, w):
     G = nx.MultiGraph()
     for item in netlist_data:
@@ -253,7 +274,7 @@ def analisar_circuito(netlist_data, w):
 
     fontes = [i for i in netlist_data if i["tipo"] == "Fonte CA"]
     if not fontes:
-        return "Sem Fonte", complex(0, 0), 0.0, "Adicione uma fonte CA no quadro."
+        return "Sem Fonte", complex(0, 0), 0.0, "Desenhe ao menos uma Fonte CA no quadro."
 
     fonte = fontes[0]
     n_src1, n_src2 = fonte["no_a"], fonte["no_b"]
@@ -265,7 +286,7 @@ def analisar_circuito(netlist_data, w):
             G_sem_fonte.remove_edge(u, v, key=k)
 
     if not nx.has_path(G_sem_fonte, n_src1, n_src2):
-        return "Circuito Aberto", complex(1e9, 0), V_rms, "Não há caminho fechado ligando a fonte."
+        return "Circuito Aberto", complex(1e9, 0), V_rms, "O circuito desenhado está aberto (sem malha fechada)."
 
     def calc_z_elem(elem, frequency_w):
         t, v = elem["tipo"], elem["valor"]
@@ -318,7 +339,7 @@ if status != "Sucesso":
     st.warning(f"⚠️ {msg}")
     st.stop()
 
-# --- RESULTADOS DAS GRANDEZAS ELÉTRICAS ---
+# --- RESULTADOS DAS GRANDEZA ELÉTRICAS ---
 abs_Z = abs(Z_eq)
 angle_Z_rad = cmath.phase(Z_eq)
 angle_Z_deg = np.degrees(angle_Z_rad)
@@ -333,11 +354,11 @@ FP = np.cos(angle_Z_rad)
 carater = "Indutivo" if Q > 0.01 else "Capacitivo" if Q < -0.01 else "Resistivo Puro"
 
 st.markdown("---")
-st.subheader("📊 Resultados Numéricos Calculados")
+st.subheader("📊 Resultados Elétricos Calculados do Desenho")
 
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Impedância |Z_eq|", f"{abs_Z:.2f} Ω")
-m2.metric("Corrente Total |I_rms|", f"{I_rms:.2f} A")
+m1.metric("Impedância Equivalente |Z_eq|", f"{abs_Z:.2f} Ω")
+m2.metric("Corrente Total RMS |I|", f"{I_rms:.2f} A")
 m3.metric("Potência Ativa (P)", f"{P:.2f} W")
 m4.metric("Fator de Potência (FP)", f"{FP:.4f}")
 
@@ -355,7 +376,7 @@ st.subheader("📐 Diagrama Fasorial e Triângulo de Potências")
 g1, g2 = st.columns(2)
 
 with g1:
-    st.markdown("**Diagrama Fasorial (V e I)**")
+    st.markdown("**Diagrama Fasorial (Tensão e Corrente)**")
     fig_fasor, ax_f = plt.subplots(figsize=(4, 4))
     escala_I = (V_rms / I_rms) * 0.4 if I_rms > 0 else 1.0
 
@@ -389,7 +410,7 @@ with g2:
     ax_p.legend(loc="upper left", fontsize=8)
     st.pyplot(fig_pot)
 
-# --- GERADOR DE RELATÓRIO PDF ---
+# --- RELATÓRIO PDF ---
 def gerar_pdf(netlist_data, v_f, f_f, z_c, i_val, p_val, q_val, s_val, fp_val, car):
     pdf = FPDF()
     pdf.add_page()
